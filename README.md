@@ -1,6 +1,8 @@
-# hiby-standalone-client
+# spotui-hiby-r3proii
 
-Experimental standalone streaming UI/client for the HiBy R3 Pro II.
+SpotUI for the HiBy R3 Pro II: an experimental standalone, phone-free streaming UI/client.
+
+> Early public source release. This is not yet a one-click install or end-user firmware package.
 
 This project provides source code, scripts, and notes for running a lightweight standalone music client on HiBy devices. It is intended for device owners who want to build, study, and modify their own hardware.
 
