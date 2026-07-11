@@ -76,6 +76,9 @@ This is an independent community research/modding project. It is provided withou
 
 ## Project documents
 
+- [Roadmap](docs/roadmap.md)
+- [Recovery notes](docs/recovery.md)
+
 - [Disclaimer](DISCLAIMER.md)
 - [Support policy](SUPPORT.md)
 - [Third-party components](THIRD_PARTY.md)
