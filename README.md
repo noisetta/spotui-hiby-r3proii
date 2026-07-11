@@ -4,6 +4,10 @@ SpotUI for the HiBy R3 Pro II: an experimental standalone, phone-free streaming 
 
 > Early public source release. This is not yet a one-click install or end-user firmware package.
 
+## Screenshot
+
+![SpotUI interface on the HiBy R3 Pro II](docs/images/spotui-interface.png)
+
 This project provides source code, scripts, and notes for running a lightweight standalone music client on HiBy devices. It is intended for device owners who want to build, study, and modify their own hardware.
 
 This project is not affiliated with, endorsed by, or supported by HiBy Music or Spotify.
@@ -72,3 +76,13 @@ This is an independent community research/modding project. It is provided withou
 - [Support policy](SUPPORT.md)
 - [Third-party components](THIRD_PARTY.md)
 - [License](LICENSE)
+
+## Support
+
+This project is maintained as an independent community research/modding project.
+
+Optional donations are welcome through Ko-fi and help support test hardware, documentation, maintenance, and continued experimentation.
+
+Donations do not purchase firmware, Spotify access, device support, warranty, priority fixes, private builds, or guaranteed features. Nothing is paywalled.
+
+[![Support me on Ko-fi](https://ko-fi.com/img/githubbutton_sm.svg)](https://ko-fi.com/noisetta)
