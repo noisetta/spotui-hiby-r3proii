@@ -35,7 +35,7 @@ This repository does not include:
 - user-specific device backups
 - ready-to-flash firmware builds
 
-Users must provide their own legally obtained stock firmware, their own device, and their own Spotify Premium account credentials locally on their device.
+This source repository does not include firmware images, ready-to-flash builds, Spotify credentials, WiFi credentials, or user-specific device files. Users are responsible for any firmware, accounts, credentials, and device setup used with their own hardware.
 
 ## Repository structure
 
