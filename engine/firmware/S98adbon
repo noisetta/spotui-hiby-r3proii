@@ -1,0 +1,34 @@
+#!/bin/sh
+#
+# S98adbon - enable ADB automatically at boot (always-on ADB).
+#
+# By default the device boots in USB mass-storage mode and ADB must be enabled
+# manually (Settings -> About, tap 10x, which runs /usr/bin/adbon). That doesn't
+# persist across reboots and, once a custom UI replaces hiby_player, there's no
+# way to reach the enable menu -- locking you out.
+#
+# This runs /usr/bin/adbon at boot so ADB is always available. It runs as an
+# S-script (S98) so rcS's "S??*" loop picks it up, before S99spotui, ensuring
+# ADB is up regardless of whether the SpotUI autostart runs.
+#
+# NOTE: this switches USB from mass-storage to ADB mode at boot, so USB SD-card
+# access is traded for always-on ADB. For a dev/modded device that's the right
+# tradeoff; the SD card is still usable on-device.
+
+case "$1" in
+    start)
+        echo "Enabling ADB (always-on)"
+        # Small delay so the USB subsystem is settled before we switch modes.
+        ( sleep 2; /usr/bin/adbon ) &
+        ;;
+    stop)
+        /usr/bin/adboff 2>/dev/null
+        ;;
+    restart|reload)
+        ;;
+    *)
+        echo "Usage: $0 {start|stop|restart}"
+        exit 1
+esac
+
+exit $?

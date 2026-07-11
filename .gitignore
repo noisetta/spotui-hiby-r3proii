@@ -1,0 +1,22 @@
+# secrets / user-specific config
+wpa_supplicant.conf
+credentials.json
+librespot-cache/
+*.key
+*.pem
+*.token
+
+# firmware / device artifacts
+*.upt
+snapshots/
+usr-data/
+*.bin
+*.img
+*.so
+ld-musl*
+hiby_player
+
+# logs / db / cache
+*.log
+*.db
+target/

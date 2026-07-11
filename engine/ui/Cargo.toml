@@ -1,0 +1,21 @@
+[package]
+name = "spotui-ui-poc"
+version = "0.1.0"
+edition = "2021"
+
+[[bin]]
+name = "spotui-ui-poc"
+path = "src/main.rs"
+
+[dependencies]
+# embedded-graphics: lightweight 2D graphics for embedded framebuffers.
+# Targets exactly our case (linear RGB565 buffer). no_std-friendly, no GC.
+embedded-graphics = "0.8"
+# libc: for the FBIOBLANK ioctl to wake the panel.
+libc = "0.2"
+
+[profile.release]
+opt-level = "z"     # optimize for size (lightweight is the goal)
+lto = true
+strip = true
+panic = "abort"

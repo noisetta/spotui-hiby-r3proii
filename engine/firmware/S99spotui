@@ -1,0 +1,41 @@
+#!/bin/sh
+#
+# S99spotui - conditionally autostart the SpotUI stack at boot.
+#
+# Runs last in the boot sequence (after S92 launches hiby_player). If the flag
+# file exists on the writable userdata partition, it launches start_spotui.sh
+# in the BACKGROUND (must not block boot) which kills hiby_player and brings up
+# the SpotUI daemon + UI. If the flag is absent, this does nothing and the
+# device boots normally into hiby_player.
+#
+# Enable  autostart:  touch  /usr/data/spotui_autostart
+# Disable autostart:  rm -f  /usr/data/spotui_autostart
+#
+# Because the flag lives on the writable userdata partition, autostart can be
+# toggled without reflashing. If SpotUI ever fails to come up, deleting the
+# flag (via ADB, or by other recovery) restores a normal boot.
+
+FLAG=/usr/data/spotui_autostart
+LAUNCHER=/usr/data/start_spotui.sh
+
+case "$1" in
+    start)
+        if [ -f "$FLAG" ] && [ -f "$LAUNCHER" ]; then
+            echo "Starting SpotUI (flag present)"
+            # Background it so boot continues; give hiby_player a moment to
+            # finish its own startup first so the panel is fully up.
+            ( sleep 3; sh "$LAUNCHER" >/tmp/spotui-boot.log 2>&1 ) &
+        else
+            echo "SpotUI autostart skipped (no flag or launcher)"
+        fi
+        ;;
+    stop)
+        ;;
+    restart|reload)
+        ;;
+    *)
+        echo "Usage: $0 {start|stop|restart}"
+        exit 1
+esac
+
+exit $?
