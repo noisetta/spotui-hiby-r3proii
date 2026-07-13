@@ -1,6 +1,6 @@
 # spotui-hiby-r3proii
 
-SpotUI for the HiBy R3 Pro II: an experimental standalone, phone-free streaming UI/client.
+SpotUI for the HiBy R3 Pro II: an experimental standalone, tetherless streaming UI/client with on-device control.
 
 > Early public source release. This is not yet a one-click install or end-user firmware package.
 
@@ -23,11 +23,24 @@ This project is not affiliated with, endorsed by, or supported by HiBy Music or 
 
 Experimental. Tested primarily on the HiBy R3 Pro II.
 
+Current device-side features include:
+
+- On-device browsing and playback of liked songs
+- Fixed bottom toolbar with Exit, Brightness, Pause/Resume, and Refresh controls
+- Persistent brightness selection
+- Battery percentage display
+- Automatic 3.5 mm and 4.4 mm output routing
+- Header-based paging through the track list
+- Track-name truncation for the compact display
+- Startup retry behavior while WiFi and the playback daemon initialize
+
+“Tetherless” means playback can be browsed and controlled directly from the HiBy instead of using it only as a receiver controlled by a phone or desktop client.
+
 Flashing or modifying firmware can brick your device. Use at your own risk.
 
 ## What is included
 
-- `engine/ui/` — framebuffer + touch UI written in Rust using embedded-graphics.
+- `engine/ui/` — framebuffer and touchscreen UI written in Rust using embedded-graphics.
 - `engine/launcher/` — launcher script for WiFi bring-up, jack routing, UI startup, daemon supervision, and panel keepalive behavior.
 - `engine/firmware/` — init scripts and firmware-side integration notes.
 - `apps/spotify/daemon/` — Spotify-compatible daemon source using librespot.

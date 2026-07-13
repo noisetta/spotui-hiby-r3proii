@@ -255,6 +255,71 @@ impl TrackItem {
     }
 }
 
+fn truncate_label(s: &str, max_chars: usize) -> String {
+    let count = s.chars().count();
+    if count <= max_chars {
+        return s.to_string();
+    }
+    if max_chars <= 3 {
+        return "...".chars().take(max_chars).collect();
+    }
+    let mut out: String = s.chars().take(max_chars - 3).collect();
+    out.push_str("...");
+    out
+}
+
+const BRIGHTNESS_ITEM_ID: &str = "__SPOTUI_BRIGHTNESS__";
+const BACKLIGHT_BRIGHTNESS: &str = "/sys/class/backlight/backlight_pwm0/brightness";
+const BATTERY_CAPACITY: &str = "/sys/class/power_supply/battery/capacity";
+const BRIGHTNESS_STATE_FILE: &str = "/usr/data/spotui_brightness";
+const BRIGHTNESS_LEVELS: [u32; 5] = [101, 80, 60, 40, 25];
+const BRIGHTNESS_LABELS: [&str; 5] = ["100%", "80%", "60%", "40%", "25%"];
+
+const EXIT_ITEM_ID: &str = "__SPOTUI_EXIT__";
+const REFRESH_ITEM_ID: &str = "__SPOTUI_REFRESH__";
+
+fn read_battery_percent() -> Option<u8> {
+    std::fs::read_to_string(BATTERY_CAPACITY)
+        .ok()
+        .and_then(|s| s.trim().parse::<u8>().ok())
+        .filter(|value| *value <= 100)
+}
+
+fn load_brightness_idx() -> usize {
+    match std::fs::read_to_string(BRIGHTNESS_STATE_FILE) {
+        Ok(s) => match s.trim().parse::<usize>() {
+            Ok(idx) if idx < BRIGHTNESS_LEVELS.len() => idx,
+            _ => 0,
+        },
+        Err(_) => 0,
+    }
+}
+
+fn save_brightness_idx(idx: usize) {
+    if let Err(e) = std::fs::write(BRIGHTNESS_STATE_FILE, idx.to_string()) {
+        eprintln!("[poc] brightness state save failed: {}", e);
+    }
+}
+
+fn apply_brightness(idx: usize) {
+    let level = BRIGHTNESS_LEVELS[idx];
+    if let Err(e) = std::fs::write(BACKLIGHT_BRIGHTNESS, level.to_string()) {
+        eprintln!("[poc] brightness write failed: {}", e);
+    } else {
+        eprintln!("[poc] brightness -> {}", BRIGHTNESS_LABELS[idx]);
+    }
+}
+
+fn add_control_items(items: &mut Vec<TrackItem>, _brightness_idx: usize) {
+    items.retain(|item| {
+        item.id != EXIT_ITEM_ID
+            && item.id != BRIGHTNESS_ITEM_ID
+            && item.id != REFRESH_ITEM_ID
+    });
+}
+
+
+
 /// Send a browse command and read the full multi-line response until "END".
 /// Parses `RESULT <id>\t<name>\t<artist>` lines into TrackItems.
 fn daemon_query(cmd: &str) -> Vec<TrackItem> {
@@ -305,11 +370,21 @@ fn daemon_query(cmd: &str) -> Vec<TrackItem> {
 
 /// Number of track rows visible on screen at once (below the header).
 /// (720 - 40 header) / 60 per row = ~11.
-const VISIBLE_ROWS: usize = 11;
+const VISIBLE_ROWS: usize = 10;
 
 /// Draw the track list with scrolling. `scroll` is the index of the first
 /// visible item; `selected` highlights one row (absolute index).
-fn draw_list(fb: &mut Framebuffer, items: &[TrackItem], scroll: usize, selected: Option<usize>, title: &str) {
+fn draw_list(
+    fb: &mut Framebuffer,
+    items: &[TrackItem],
+    scroll: usize,
+    selected: Option<usize>,
+    title: &str,
+    battery_percent: Option<u8>,
+    brightness_idx: usize,
+    paused: bool,
+    exit_armed: bool,
+) {
     // Clear to dark blue.
     Rectangle::new(Point::zero(), Size::new(WIDTH as u32, HEIGHT as u32))
         .into_styled(PrimitiveStyle::with_fill(Rgb565::new(0, 0, 12)))
@@ -317,14 +392,28 @@ fn draw_list(fb: &mut Framebuffer, items: &[TrackItem], scroll: usize, selected:
         .ok();
 
     // Green header bar with a title.
-    Rectangle::new(Point::zero(), Size::new(WIDTH as u32, 30))
+    Rectangle::new(Point::zero(), Size::new(WIDTH as u32, 40))
         .into_styled(PrimitiveStyle::with_fill(Rgb565::new(0, 63, 0)))
         .draw(fb)
         .ok();
     let header_style = MonoTextStyle::new(&FONT_9X15_BOLD, Rgb565::BLACK);
-    Text::with_baseline(title, Point::new(6, 8), header_style, Baseline::Top)
+    Text::with_baseline(title, Point::new(6, 12), header_style, Baseline::Top)
         .draw(fb)
         .ok();
+
+    let battery_label = match battery_percent {
+        Some(value) => format!("{}%", value),
+        None => "--%".to_string(),
+    };
+    let battery_x = WIDTH as i32 - 8 - battery_label.chars().count() as i32 * 9;
+    Text::with_baseline(
+        &battery_label,
+        Point::new(battery_x, 12),
+        header_style,
+        Baseline::Top,
+    )
+    .draw(fb)
+    .ok();
 
     let text_style = MonoTextStyle::new(&FONT_9X15, Rgb565::WHITE);
     let sel_style = MonoTextStyle::new(&FONT_9X15_BOLD, Rgb565::BLACK);
@@ -333,17 +422,20 @@ fn draw_list(fb: &mut Framebuffer, items: &[TrackItem], scroll: usize, selected:
     let end = (scroll + VISIBLE_ROWS).min(items.len());
     for (row, i) in (scroll..end).enumerate() {
         let item = &items[i];
-        let label = item.label();
+        let mut label = item.label();
         let y = 40 + row as i32 * ROW_HEIGHT;
         let is_sel = selected == Some(i);
 
+        label = truncate_label(&label, if is_sel { 50 } else { 52 });
+
         if is_sel {
             Rectangle::new(Point::new(0, y), Size::new(WIDTH as u32, ROW_HEIGHT as u32))
-                .into_styled(PrimitiveStyle::with_fill(Rgb565::CSS_ORANGE))
+                .into_styled(PrimitiveStyle::with_fill(Rgb565::new(0, 45, 45)))
                 .draw(fb)
                 .ok();
-            Text::with_baseline(&label, Point::new(10, y + 22), sel_style, Baseline::Top)
-                .draw(fb)
+            let selected_label = format!("> {}", label);
+              Text::with_baseline(&selected_label, Point::new(10, y + 22), sel_style, Baseline::Top)
+                  .draw(fb)
                 .ok();
         } else {
             Text::with_baseline(&label, Point::new(10, y + 22), text_style, Baseline::Top)
@@ -357,23 +449,98 @@ fn draw_list(fb: &mut Framebuffer, items: &[TrackItem], scroll: usize, selected:
             .ok();
     }
 
-    // Scroll indicators: small arrows if there's more above/below.
+    // Header scroll indicators.
+    // Tapping most of the header pages up; the far-right section pages down.
     if scroll > 0 {
-        // up arrow area (top-right)
-        Text::with_baseline("^", Point::new(WIDTH as i32 - 20, 8), header_style, Baseline::Top)
-            .draw(fb)
-            .ok();
+        Text::with_baseline(
+            "^",
+            Point::new(WIDTH as i32 - 112, 12),
+            header_style,
+            Baseline::Top,
+        )
+        .draw(fb)
+        .ok();
     }
+
     if end < items.len() {
-        // down arrow (bottom)
-        Rectangle::new(Point::new(WIDTH as i32 - 30, HEIGHT as i32 - 24), Size::new(24, 24))
-            .into_styled(PrimitiveStyle::with_fill(Rgb565::new(0, 40, 0)))
-            .draw(fb)
-            .ok();
-        Text::with_baseline("v", Point::new(WIDTH as i32 - 24, HEIGHT as i32 - 22), text_style, Baseline::Top)
+        Text::with_baseline(
+            "v",
+            Point::new(WIDTH as i32 - 88, 12),
+            header_style,
+            Baseline::Top,
+        )
+        .draw(fb)
+        .ok();
+    }
+
+    // Non-interactive separator immediately above the toolbar.
+    let down_strip_y = HEIGHT as i32 - 80;
+    Rectangle::new(
+        Point::new(0, down_strip_y),
+        Size::new(WIDTH as u32, 20),
+    )
+    .into_styled(PrimitiveStyle::with_fill(Rgb565::new(0, 24, 0)))
+    .draw(fb)
+    .ok();
+
+    // Fixed four-button toolbar.
+    let toolbar_y = HEIGHT as i32 - 60;
+    Rectangle::new(
+        Point::new(0, toolbar_y),
+        Size::new(WIDTH as u32, 60),
+    )
+    .into_styled(PrimitiveStyle::with_fill(Rgb565::new(0, 38, 0)))
+    .draw(fb)
+    .ok();
+
+    for x in [120, 240, 360] {
+        Rectangle::new(Point::new(x, toolbar_y), Size::new(1, 60))
+            .into_styled(PrimitiveStyle::with_fill(Rgb565::CSS_DARK_GRAY))
             .draw(fb)
             .ok();
     }
+
+    let exit_label = if exit_armed { "Confirm" } else { "Exit" };
+    let brightness_label =
+        format!("Bright {}", BRIGHTNESS_LABELS[brightness_idx]);
+    let playback_label = if paused { "Resume" } else { "Pause" };
+    let button_style = MonoTextStyle::new(&FONT_9X15_BOLD, Rgb565::WHITE);
+
+    Text::with_baseline(
+        exit_label,
+        Point::new(40, toolbar_y + 22),
+        button_style,
+        Baseline::Top,
+    )
+    .draw(fb)
+    .ok();
+
+    Text::with_baseline(
+        &brightness_label,
+        Point::new(128, toolbar_y + 22),
+        button_style,
+        Baseline::Top,
+    )
+    .draw(fb)
+    .ok();
+
+    Text::with_baseline(
+        playback_label,
+        Point::new(270, toolbar_y + 22),
+        button_style,
+        Baseline::Top,
+    )
+    .draw(fb)
+    .ok();
+
+    Text::with_baseline(
+        "Refresh",
+        Point::new(385, toolbar_y + 22),
+        button_style,
+        Baseline::Top,
+    )
+    .draw(fb)
+    .ok();
 
     fb.flush().ok();
 }
@@ -442,6 +609,13 @@ fn le_u16(b: &[u8]) -> u16 {
 }
 fn le_i32(b: &[u8]) -> i32 {
     i32::from_le_bytes([b[0], b[1], b[2], b[3]])
+}
+
+fn return_to_hiby() {
+    eprintln!("[poc] exit requested; running return_to_hiby.sh");
+    let _ = std::process::Command::new("sh")
+        .arg("/usr/data/return_to_hiby.sh")
+        .spawn();
 }
 
 fn main() {
@@ -518,10 +692,25 @@ fn main() {
         });
     }
 
+    let mut brightness_idx: usize = load_brightness_idx();
+    add_control_items(&mut items, brightness_idx);
     let mut selected: Option<usize> = None;
     let mut scroll: usize = 0;
+    let mut paused = false;
+    let mut exit_armed = false;
     let title = "Liked Songs";
-    draw_list(&mut fb, &items, scroll, selected, title);
+    let mut battery_percent = read_battery_percent();
+    draw_list(
+        &mut fb,
+        &items,
+        scroll,
+        selected,
+        title,
+        battery_percent,
+        brightness_idx,
+        paused,
+        exit_armed,
+    );
     eprintln!("[poc] drew initial list");
 
     // Open touch input (non-blocking, so we can redraw on a heartbeat even
@@ -560,6 +749,7 @@ fn main() {
     };
 
     let mut ev = [0u8; EVENT_SIZE];
+    let mut cur_x: i32 = 0;
     let mut cur_y: i32 = 0;
     let mut touch_down = false;
 
@@ -591,6 +781,9 @@ fn main() {
     let mut last_jack_check = std::time::Instant::now();
     let mut last_port: Option<u8> = initial_port;
     let mut last_liked_retry = std::time::Instant::now();
+    let mut last_battery_check = std::time::Instant::now();
+    let startup_time = std::time::Instant::now();
+    let mut startup_brightness_applied = false;
 
     loop {
         // Drain any available input events (non-blocking).
@@ -603,7 +796,9 @@ fn main() {
 
                     match etype {
                         EV_ABS => {
-                            if code == ABS_MT_POSITION_Y {
+                            if code == ABS_MT_POSITION_X {
+                                cur_x = value;
+                            } else if code == ABS_MT_POSITION_Y {
                                 cur_y = value;
                             }
                         }
@@ -614,39 +809,125 @@ fn main() {
                         }
                         EV_SYN => {
                             if code == SYN_REPORT && touch_down {
-                                // Scroll zones: top 40px header area = page up,
-                                // bottom 40px = page down. Middle = select row.
+                                // Header = page up; strip above toolbar = page down.
+                                // The bottom 60px are four equal-width controls.
+                                const DOWN_STRIP_TOP: i32 = 640;
+                                const TOOLBAR_TOP: i32 = 660;
+                                const BUTTON_WIDTH: i32 = 120;
+
                                 if cur_y < LIST_TOP {
-                                    // tapped header -> scroll up a page
-                                    let page = VISIBLE_ROWS.saturating_sub(1).max(1);
-                                    scroll = scroll.saturating_sub(page);
+                                    let page =
+                                        VISIBLE_ROWS.saturating_sub(1).max(1);
+                                    let max_scroll =
+                                        items.len().saturating_sub(VISIBLE_ROWS);
+
+                                    if cur_x < WIDTH as i32 - 120 {
+                                        scroll = scroll.saturating_sub(page);
+                                        eprintln!(
+                                            "[poc] header scroll up -> {scroll}"
+                                        );
+                                    } else {
+                                        scroll = (scroll + page).min(max_scroll);
+                                        eprintln!(
+                                            "[poc] header scroll down -> {scroll}"
+                                        );
+                                    }
+
+                                    exit_armed = false;
                                     dirty = true;
-                                    eprintln!("[poc] scroll up -> {scroll}");
-                                } else if cur_y >= HEIGHT as i32 - 40 {
-                                    // tapped bottom -> scroll down a page
-                                    let page = VISIBLE_ROWS.saturating_sub(1).max(1);
-                                    let max_scroll = items.len().saturating_sub(VISIBLE_ROWS);
-                                    scroll = (scroll + page).min(max_scroll);
-                                    dirty = true;
-                                    eprintln!("[poc] scroll down -> {scroll}");
+                                } else if cur_y >= TOOLBAR_TOP {
+                                    let safe_x = cur_x.max(0).min(WIDTH as i32 - 1);
+                                    let button = safe_x / BUTTON_WIDTH;
+
+                                    match button {
+                                        0 => {
+                                            if exit_armed {
+                                                eprintln!("[poc] toolbar exit confirmed");
+                                                return_to_hiby();
+                                                return;
+                                            } else {
+                                                exit_armed = true;
+                                                dirty = true;
+                                                eprintln!("[poc] toolbar exit armed");
+                                            }
+                                        }
+                                        1 => {
+                                            exit_armed = false;
+                                            brightness_idx =
+                                                (brightness_idx + 1) % BRIGHTNESS_LEVELS.len();
+                                            apply_brightness(brightness_idx);
+                                            save_brightness_idx(brightness_idx);
+                                            dirty = true;
+                                            eprintln!(
+                                                "[poc] toolbar brightness -> {}",
+                                                BRIGHTNESS_LABELS[brightness_idx]
+                                            );
+                                        }
+                                        2 => {
+                                            exit_armed = false;
+                                            if paused {
+                                                daemon_send("PLAY");
+                                                paused = false;
+                                                eprintln!("[poc] toolbar resume");
+                                            } else {
+                                                daemon_send("PAUSE");
+                                                paused = true;
+                                                eprintln!("[poc] toolbar pause");
+                                            }
+                                            dirty = true;
+                                        }
+                                        3 => {
+                                            exit_armed = false;
+                                            eprintln!("[poc] toolbar refresh");
+                                            let fetched = daemon_query("LIKED");
+                                            if fetched.is_empty() {
+                                                eprintln!(
+                                                    "[poc] refresh returned no tracks; keeping current list"
+                                                );
+                                            } else {
+                                                items = fetched;
+                                                add_control_items(
+                                                    &mut items,
+                                                    brightness_idx,
+                                                );
+                                                tracks_loaded = true;
+                                                scroll = 0;
+                                                selected = None;
+                                                dirty = true;
+                                                eprintln!(
+                                                    "[poc] refresh loaded {} tracks",
+                                                    items.len()
+                                                );
+                                            }
+                                        }
+                                        _ => {}
+                                    }
+                                } else if cur_y >= DOWN_STRIP_TOP {
+                                    // Separator area intentionally does nothing.
+                                    exit_armed = false;
                                 } else {
-                                    // select/play a row in the visible window
                                     let rel = cur_y - LIST_TOP;
                                     let visible_row = (rel / ROW_HEIGHT) as usize;
                                     let idx = scroll + visible_row;
+
                                     if idx < items.len() {
-                                        if selected != Some(idx) {
-                                            selected = Some(idx);
-                                            dirty = true;
-                                        }
-                                        let item = &items[idx];
+                                        selected = Some(idx);
+                                        exit_armed = false;
+
+                                        let item_id = items[idx].id.clone();
+                                        let item_name = items[idx].name.clone();
+
                                         eprintln!(
                                             "[poc] tapped idx {idx}: {} ({})",
-                                            item.name, item.id
+                                            item_name, item_id
                                         );
-                                        if !item.id.is_empty() {
-                                            daemon_send(&format!("LOAD {}", item.id));
+
+                                        if !item_id.is_empty() {
+                                            daemon_send(&format!("LOAD {}", item_id));
+                                            paused = false;
                                         }
+
+                                        dirty = true;
                                     }
                                 }
                                 touch_down = false;
@@ -685,7 +966,20 @@ fn main() {
             }
         }
 
-        // If we haven't loaded real tracks yet (daemon wasn't ready at
+        // Apply the saved brightness once, after the UI has been running
+// long enough for the initial draw and keepalive flushes to settle.
+if !startup_brightness_applied
+&& startup_time.elapsed().as_millis() >= 2000
+{
+apply_brightness(brightness_idx);
+startup_brightness_applied = true;
+eprintln!(
+"[poc] restored saved brightness -> {}",
+BRIGHTNESS_LABELS[brightness_idx]
+);
+}
+
+// If we haven't loaded real tracks yet (daemon wasn't ready at
         // startup), retry the LIKED fetch every ~2s until it succeeds. This
         // makes the UI robust to being launched before the daemon is up.
         if !tracks_loaded && last_liked_retry.elapsed().as_millis() >= 2000 {
@@ -693,11 +987,23 @@ fn main() {
             let fetched = daemon_query("LIKED");
             if !fetched.is_empty() {
                 items = fetched;
+                add_control_items(&mut items, brightness_idx);
                 tracks_loaded = true;
                 scroll = 0;
                 selected = None;
                 dirty = true;
                 eprintln!("[poc] loaded {} liked tracks (retry)", items.len());
+            }
+        }
+
+        // Refresh the battery value every 30 seconds.
+        if last_battery_check.elapsed().as_secs() >= 30 {
+            last_battery_check = std::time::Instant::now();
+            let updated = read_battery_percent();
+            if updated != battery_percent {
+                battery_percent = updated;
+                dirty = true;
+                eprintln!("[poc] battery -> {:?}", battery_percent);
             }
         }
 
@@ -726,7 +1032,17 @@ fn main() {
         // expensive part (embedded-graphics + 691KB flush), so we avoid it when
         // idle.
         if dirty {
-            draw_list(&mut fb, &items, scroll, selected, title);
+            draw_list(
+                &mut fb,
+                &items,
+                scroll,
+                selected,
+                title,
+                battery_percent,
+                brightness_idx,
+                paused,
+                exit_armed,
+            );
             last_flush = std::time::Instant::now();
             dirty = false;
         } else if last_flush.elapsed().as_millis() as u64 >= keepalive_ms {
