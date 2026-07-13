@@ -12,7 +12,6 @@ Optional donations support test hardware, documentation, maintenance, and contin
 
 <p>
   <img src="docs/images/spotui-interface.png" alt="SpotUI interface screenshot" width="360">
-  <img src="docs/images/spotui-device-photo.jpg" alt="SpotUI running on the HiBy R3 Pro II" width="360">
 </p>
 
 This project provides source code, scripts, and notes for running a lightweight standalone music client on HiBy devices. It is intended for device owners who want to build, study, and modify their own hardware.
