@@ -80,7 +80,6 @@ const PORT_44MM: u8 = 3;
 
 // ---- UI layout ----------------------------------------------------------
 const ROW_HEIGHT: i32 = 60;
-const N_ROWS: usize = 6;
 
 /// A simple framebuffer wrapper that implements embedded-graphics DrawTarget.
 /// Holds an in-memory RGB565 buffer; flush() writes it to /dev/fb0.
@@ -268,15 +267,12 @@ fn truncate_label(s: &str, max_chars: usize) -> String {
     out
 }
 
-const BRIGHTNESS_ITEM_ID: &str = "__SPOTUI_BRIGHTNESS__";
 const BACKLIGHT_BRIGHTNESS: &str = "/sys/class/backlight/backlight_pwm0/brightness";
 const BATTERY_CAPACITY: &str = "/sys/class/power_supply/battery/capacity";
 const BRIGHTNESS_STATE_FILE: &str = "/usr/data/spotui_brightness";
 const BRIGHTNESS_LEVELS: [u32; 5] = [101, 80, 60, 40, 25];
 const BRIGHTNESS_LABELS: [&str; 5] = ["100%", "80%", "60%", "40%", "25%"];
 
-const EXIT_ITEM_ID: &str = "__SPOTUI_EXIT__";
-const REFRESH_ITEM_ID: &str = "__SPOTUI_REFRESH__";
 
 fn read_battery_percent() -> Option<u8> {
     std::fs::read_to_string(BATTERY_CAPACITY)
@@ -309,16 +305,6 @@ fn apply_brightness(idx: usize) {
         eprintln!("[poc] brightness -> {}", BRIGHTNESS_LABELS[idx]);
     }
 }
-
-fn add_control_items(items: &mut Vec<TrackItem>, _brightness_idx: usize) {
-    items.retain(|item| {
-        item.id != EXIT_ITEM_ID
-            && item.id != BRIGHTNESS_ITEM_ID
-            && item.id != REFRESH_ITEM_ID
-    });
-}
-
-
 
 /// Send a browse command and read the full multi-line response until "END".
 /// Parses `RESULT <id>\t<name>\t<artist>` lines into TrackItems.
@@ -693,7 +679,6 @@ fn main() {
     }
 
     let mut brightness_idx: usize = load_brightness_idx();
-    add_control_items(&mut items, brightness_idx);
     let mut selected: Option<usize> = None;
     let mut scroll: usize = 0;
     let mut paused = false;
@@ -886,10 +871,6 @@ fn main() {
                                                 );
                                             } else {
                                                 items = fetched;
-                                                add_control_items(
-                                                    &mut items,
-                                                    brightness_idx,
-                                                );
                                                 tracks_loaded = true;
                                                 scroll = 0;
                                                 selected = None;
@@ -987,8 +968,7 @@ BRIGHTNESS_LABELS[brightness_idx]
             let fetched = daemon_query("LIKED");
             if !fetched.is_empty() {
                 items = fetched;
-                add_control_items(&mut items, brightness_idx);
-                tracks_loaded = true;
+                            tracks_loaded = true;
                 scroll = 0;
                 selected = None;
                 dirty = true;
