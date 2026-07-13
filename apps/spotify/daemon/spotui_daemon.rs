@@ -13,6 +13,7 @@
 //   PLAY                     -> resume
 //   PAUSE                    -> pause
 //   STOP                     -> stop
+//   STATUS                   -> report current playback state
 //   QUIT                     -> shut the daemon down
 //
 // Audio goes out through whichever backend `audio_backend::find` selects,
@@ -20,30 +21,24 @@
 // SinkBuilder). For the HiBy we use the pipe backend piped to aplay, exactly
 // as already proven working.
 
-use std::{
-    process::exit,
-    sync::Arc,
-};
+use std::{process::exit, sync::Arc};
 
 use tokio::{
     io::{AsyncBufReadExt, AsyncWriteExt, BufReader},
     net::{TcpListener, UnixListener},
+    sync::RwLock,
 };
 
 use librespot::{
     core::{
-        cache::Cache,
-        config::SessionConfig,
-        session::Session,
-        spotify_id::SpotifyId,
-        SpotifyUri,
+        cache::Cache, config::SessionConfig, session::Session, spotify_id::SpotifyId, SpotifyUri,
     },
     metadata::{Metadata, Playlist, Track},
     playback::{
         audio_backend,
         config::{AudioFormat, PlayerConfig},
         mixer::{self, Mixer, MixerConfig},
-        player::Player,
+        player::{Player, PlayerEvent},
     },
 };
 
@@ -124,6 +119,30 @@ async fn main() {
         move || backend(None, audio_format),
     );
 
+    // Track the player's actual state from librespot events. This is shared
+    // with all control connections so STATUS reports the latest known state.
+    let playback_state = Arc::new(RwLock::new("STOPPED"));
+    let event_state = playback_state.clone();
+    let mut player_events = player.get_player_event_channel();
+
+    tokio::spawn(async move {
+        while let Some(event) = player_events.recv().await {
+            let new_state = match event {
+                PlayerEvent::Loading { .. } => Some("LOADING"),
+                PlayerEvent::Playing { .. } => Some("PLAYING"),
+                PlayerEvent::Paused { .. } => Some("PAUSED"),
+                PlayerEvent::Stopped { .. } | PlayerEvent::EndOfTrack { .. } => Some("STOPPED"),
+                PlayerEvent::Unavailable { .. } => Some("ERROR"),
+                _ => None,
+            };
+
+            if let Some(new_state) = new_state {
+                *event_state.write().await = new_state;
+                eprintln!("[spotui] playback state -> {new_state}");
+            }
+        }
+    });
+
     // Player::new already returns an Arc<Player> (its methods take &self and
     // it's designed to be shared), so we use it directly across connections.
     // No additional Arc wrapping needed.
@@ -161,6 +180,7 @@ async fn main() {
     let unix_player = player.clone();
     let unix_session = session.clone();
     let unix_mixer = mixer.clone();
+    let unix_playback_state = playback_state.clone();
     let unix_task = tokio::spawn(async move {
         loop {
             match unix_listener.accept().await {
@@ -168,9 +188,10 @@ async fn main() {
                     let player = unix_player.clone();
                     let session = unix_session.clone();
                     let mixer = unix_mixer.clone();
+                    let playback_state = unix_playback_state.clone();
                     tokio::spawn(async move {
                         let (r, w) = stream.into_split();
-                        handle_conn(r, w, player, session, mixer).await;
+                        handle_conn(r, w, player, session, mixer, playback_state).await;
                     });
                 }
                 Err(e) => eprintln!("[spotui] unix accept error: {e}"),
@@ -181,6 +202,7 @@ async fn main() {
     let tcp_player = player.clone();
     let tcp_session = session.clone();
     let tcp_mixer = mixer.clone();
+    let tcp_playback_state = playback_state.clone();
     let tcp_task = tokio::spawn(async move {
         loop {
             match tcp_listener.accept().await {
@@ -188,9 +210,10 @@ async fn main() {
                     let player = tcp_player.clone();
                     let session = tcp_session.clone();
                     let mixer = tcp_mixer.clone();
+                    let playback_state = tcp_playback_state.clone();
                     tokio::spawn(async move {
                         let (r, w) = stream.into_split();
-                        handle_conn(r, w, player, session, mixer).await;
+                        handle_conn(r, w, player, session, mixer, playback_state).await;
                     });
                 }
                 Err(e) => eprintln!("[spotui] tcp accept error: {e}"),
@@ -211,8 +234,8 @@ async fn handle_conn<R, W>(
     player: Arc<Player>,
     session: Session,
     mixer: Arc<dyn Mixer>,
-)
-where
+    playback_state: Arc<RwLock<&'static str>>,
+) where
     R: tokio::io::AsyncRead + Unpin,
     W: tokio::io::AsyncWrite + Unpin,
 {
@@ -247,6 +270,10 @@ where
             "STOP" => {
                 player.stop();
                 "OK stop\n".to_string()
+            }
+            "STATUS" => {
+                let state = *playback_state.read().await;
+                format!("STATUS {state}\n")
             }
             "SEARCH" => search_tracks(&session, arg).await,
             "LIKED" => liked_tracks(&session).await,
@@ -387,7 +414,10 @@ async fn playlist_tracks(session: &Session, playlist_arg: &str) -> String {
     let mut track_uris: Vec<String> = Vec::new();
     for t in plist.tracks() {
         if let SpotifyUri::Track { id } = t {
-            track_uris.push(format!("spotify:track:{}", id.to_base62().unwrap_or_default()));
+            track_uris.push(format!(
+                "spotify:track:{}",
+                id.to_base62().unwrap_or_default()
+            ));
         }
         if track_uris.len() >= MAX_RESULTS {
             break;
