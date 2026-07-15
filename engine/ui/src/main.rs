@@ -235,6 +235,27 @@ fn daemon_send(cmd: &str) {
     }
 }
 
+/// Query whether the daemon reports playback as paused.
+/// Other known states are treated as not paused. Connection failures return
+/// None so startup polling remains quiet until the daemon is available.
+fn daemon_paused() -> Option<bool> {
+    let mut s = UnixStream::connect(DAEMON_SOCK).ok()?;
+    s.write_all(b"STATUS\n").ok()?;
+
+    let mut buf = [0u8; 128];
+    let n = s.read(&mut buf).ok()?;
+    let reply = String::from_utf8_lossy(&buf[..n]);
+
+    match reply.trim() {
+        "STATUS PAUSED" => Some(true),
+        "STATUS STOPPED"
+        | "STATUS LOADING"
+        | "STATUS PLAYING"
+        | "STATUS ERROR" => Some(false),
+        _ => None,
+    }
+}
+
 /// A track fetched from the daemon's browse commands.
 #[derive(Clone)]
 struct TrackItem {
@@ -766,6 +787,7 @@ fn main() {
     let mut last_jack_check = std::time::Instant::now();
     let mut last_port: Option<u8> = initial_port;
     let mut last_liked_retry = std::time::Instant::now();
+    let mut last_status_check = std::time::Instant::now();
     let mut last_battery_check = std::time::Instant::now();
     let startup_time = std::time::Instant::now();
     let mut startup_brightness_applied = false;
@@ -852,11 +874,9 @@ fn main() {
                                             exit_armed = false;
                                             if paused {
                                                 daemon_send("PLAY");
-                                                paused = false;
                                                 eprintln!("[poc] toolbar resume");
                                             } else {
                                                 daemon_send("PAUSE");
-                                                paused = true;
                                                 eprintln!("[poc] toolbar pause");
                                             }
                                             dirty = true;
@@ -905,7 +925,6 @@ fn main() {
 
                                         if !item_id.is_empty() {
                                             daemon_send(&format!("LOAD {}", item_id));
-                                            paused = false;
                                         }
 
                                         dirty = true;
@@ -973,6 +992,18 @@ BRIGHTNESS_LABELS[brightness_idx]
                 selected = None;
                 dirty = true;
                 eprintln!("[poc] loaded {} liked tracks (retry)", items.len());
+            }
+        }
+
+        // Synchronize the Pause/Resume label with the daemon once a second.
+        if last_status_check.elapsed().as_millis() >= 1000 {
+            last_status_check = std::time::Instant::now();
+            if let Some(updated_paused) = daemon_paused() {
+                if updated_paused != paused {
+                    paused = updated_paused;
+                    dirty = true;
+                    eprintln!("[poc] playback paused -> {}", paused);
+                }
             }
         }
 
