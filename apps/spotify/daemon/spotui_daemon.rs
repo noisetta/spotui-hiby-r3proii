@@ -14,6 +14,7 @@
 //   PAUSE                    -> pause
 //   STOP                     -> stop
 //   STATUS                   -> report current playback state
+//   NOW_PLAYING              -> report current track metadata
 //   QUIT                     -> shut the daemon down
 //
 // Audio goes out through whichever backend `audio_backend::find` selects,
@@ -33,7 +34,7 @@ use librespot::{
     core::{
         cache::Cache, config::SessionConfig, session::Session, spotify_id::SpotifyId, SpotifyUri,
     },
-    metadata::{Metadata, Playlist, Track},
+    metadata::{audio::UniqueFields, Metadata, Playlist, Track},
     playback::{
         audio_backend,
         config::{AudioFormat, PlayerConfig},
@@ -48,6 +49,21 @@ const TCP_ADDR: &str = "127.0.0.1:5599";
 // removable SD card), so auth works even when no SD card is inserted -- e.g.
 // right after a firmware flash, where the SD is removed before reboot.
 const CACHE_DIR: &str = "/usr/data/librespot-cache";
+
+struct NowPlaying {
+    id: String,
+    title: String,
+    artist: String,
+    duration_ms: u32,
+}
+
+/// Keep line-oriented protocol fields from containing separators.
+fn sanitize_field(value: &str) -> String {
+    value
+        .replace("\t", " ")
+        .replace("\r", " ")
+        .replace("\n", " ")
+}
 
 #[tokio::main]
 async fn main() {
@@ -119,15 +135,16 @@ async fn main() {
         move || backend(None, audio_format),
     );
 
-    // Track the player's actual state from librespot events. This is shared
-    // with all control connections so STATUS reports the latest known state.
+    // Track actual player state and current metadata from librespot events.
     let playback_state = Arc::new(RwLock::new("STOPPED"));
+    let now_playing = Arc::new(RwLock::new(None::<NowPlaying>));
     let event_state = playback_state.clone();
+    let event_now_playing = now_playing.clone();
     let mut player_events = player.get_player_event_channel();
 
     tokio::spawn(async move {
         while let Some(event) = player_events.recv().await {
-            let new_state = match event {
+            let new_state = match &event {
                 PlayerEvent::Loading { .. } => Some("LOADING"),
                 PlayerEvent::Playing { .. } => Some("PLAYING"),
                 PlayerEvent::Paused { .. } => Some("PAUSED"),
@@ -139,6 +156,48 @@ async fn main() {
             if let Some(new_state) = new_state {
                 *event_state.write().await = new_state;
                 eprintln!("[spotui] playback state -> {new_state}");
+            }
+
+            match event {
+                PlayerEvent::TrackChanged { audio_item } => {
+                    let artist = match &audio_item.unique_fields {
+                        UniqueFields::Track { artists, .. } => artists
+                            .0
+                            .iter()
+                            .map(|artist| artist.name.clone())
+                            .collect::<Vec<_>>()
+                            .join(", "),
+                        UniqueFields::Local { artists, .. } => {
+                            artists.clone().unwrap_or_default()
+                        }
+                        UniqueFields::Episode { show_name, .. } => show_name.clone(),
+                    };
+
+                    let id = audio_item
+                        .uri
+                        .rsplit(":")
+                        .next()
+                        .unwrap_or(&audio_item.uri);
+
+                    let item = NowPlaying {
+                        id: sanitize_field(id),
+                        title: sanitize_field(&audio_item.name),
+                        artist: sanitize_field(&artist),
+                        duration_ms: audio_item.duration_ms,
+                    };
+
+                    eprintln!(
+                        "[spotui] now playing -> {} - {}",
+                        item.title, item.artist
+                    );
+                    *event_now_playing.write().await = Some(item);
+                }
+                PlayerEvent::Stopped { .. }
+                | PlayerEvent::EndOfTrack { .. }
+                | PlayerEvent::Unavailable { .. } => {
+                    *event_now_playing.write().await = None;
+                }
+                _ => {}
             }
         }
     });
@@ -181,6 +240,7 @@ async fn main() {
     let unix_session = session.clone();
     let unix_mixer = mixer.clone();
     let unix_playback_state = playback_state.clone();
+    let unix_now_playing = now_playing.clone();
     let unix_task = tokio::spawn(async move {
         loop {
             match unix_listener.accept().await {
@@ -189,9 +249,19 @@ async fn main() {
                     let session = unix_session.clone();
                     let mixer = unix_mixer.clone();
                     let playback_state = unix_playback_state.clone();
+                    let now_playing = unix_now_playing.clone();
                     tokio::spawn(async move {
                         let (r, w) = stream.into_split();
-                        handle_conn(r, w, player, session, mixer, playback_state).await;
+                        handle_conn(
+                            r,
+                            w,
+                            player,
+                            session,
+                            mixer,
+                            playback_state,
+                            now_playing,
+                        )
+                        .await;
                     });
                 }
                 Err(e) => eprintln!("[spotui] unix accept error: {e}"),
@@ -203,6 +273,7 @@ async fn main() {
     let tcp_session = session.clone();
     let tcp_mixer = mixer.clone();
     let tcp_playback_state = playback_state.clone();
+    let tcp_now_playing = now_playing.clone();
     let tcp_task = tokio::spawn(async move {
         loop {
             match tcp_listener.accept().await {
@@ -211,9 +282,19 @@ async fn main() {
                     let session = tcp_session.clone();
                     let mixer = tcp_mixer.clone();
                     let playback_state = tcp_playback_state.clone();
+                    let now_playing = tcp_now_playing.clone();
                     tokio::spawn(async move {
                         let (r, w) = stream.into_split();
-                        handle_conn(r, w, player, session, mixer, playback_state).await;
+                        handle_conn(
+                            r,
+                            w,
+                            player,
+                            session,
+                            mixer,
+                            playback_state,
+                            now_playing,
+                        )
+                        .await;
                     });
                 }
                 Err(e) => eprintln!("[spotui] tcp accept error: {e}"),
@@ -235,6 +316,7 @@ async fn handle_conn<R, W>(
     session: Session,
     mixer: Arc<dyn Mixer>,
     playback_state: Arc<RwLock<&'static str>>,
+    now_playing: Arc<RwLock<Option<NowPlaying>>>,
 ) where
     R: tokio::io::AsyncRead + Unpin,
     W: tokio::io::AsyncWrite + Unpin,
@@ -274,6 +356,16 @@ async fn handle_conn<R, W>(
             "STATUS" => {
                 let state = *playback_state.read().await;
                 format!("STATUS {state}\n")
+            }
+            "NOW_PLAYING" => {
+                let current = now_playing.read().await;
+                match current.as_ref() {
+                    Some(item) => format!(
+                        "NOW_PLAYING {}\t{}\t{}\t{}\n",
+                        item.id, item.title, item.artist, item.duration_ms
+                    ),
+                    None => "NOW_PLAYING NONE\n".to_string(),
+                }
             }
             "SEARCH" => search_tracks(&session, arg).await,
             "LIKED" => liked_tracks(&session).await,
