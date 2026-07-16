@@ -276,7 +276,53 @@ fn daemon_playback_state() -> Option<PlaybackState> {
     PlaybackState::from_status_reply(reply.trim())
 }
 
-/// A track fetched from the daemon's browse commands.
+/// Metadata for the track currently loaded by the daemon.
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct NowPlaying {
+    id: String,
+    title: String,
+    artist: String,
+    duration_ms: u32,
+}
+
+/// Query the current track reported by the daemon.
+///
+/// The outer Option indicates whether a valid daemon response was received.
+/// The inner Option is None when no track is loaded.
+fn daemon_now_playing() -> Option<Option<NowPlaying>> {
+    let mut s = UnixStream::connect(DAEMON_SOCK).ok()?;
+    s.write_all(b"NOW_PLAYING\n").ok()?;
+
+    let mut buf = [0u8; 1024];
+    let n = s.read(&mut buf).ok()?;
+    let reply = String::from_utf8_lossy(&buf[..n]);
+    let reply = reply.trim();
+
+    if reply == "NOW_PLAYING NONE" {
+        return Some(None);
+    }
+
+    let rest = reply.strip_prefix("NOW_PLAYING ")?;
+    let mut parts = rest.splitn(4, "\t");
+
+    let id = parts.next()?.trim().to_string();
+    let title = parts.next()?.trim().to_string();
+    let artist = parts.next()?.trim().to_string();
+    let duration_ms = parts.next()?.trim().parse().ok()?;
+
+    if id.is_empty() {
+        return None;
+    }
+
+    Some(Some(NowPlaying {
+        id,
+        title,
+        artist,
+        duration_ms,
+    }))
+}
+
+/// A track fetched from the daemon browse commands.
 #[derive(Clone)]
 struct TrackItem {
     id: String,
@@ -742,6 +788,7 @@ fn main() {
     let mut selected: Option<usize> = None;
     let mut scroll: usize = 0;
     let mut playback_state = PlaybackState::Unknown;
+    let mut now_playing: Option<NowPlaying> = None;
     let mut exit_armed = false;
     let title = "Liked Songs";
     let mut battery_percent = read_battery_percent();
@@ -1034,14 +1081,33 @@ BRIGHTNESS_LABELS[brightness_idx]
             }
         }
 
-        // Synchronize playback state with the daemon once a second.
+        // Synchronize playback state and current-track metadata with the
+        // daemon once a second.
         if last_status_check.elapsed().as_millis() >= 1000 {
             last_status_check = std::time::Instant::now();
+
             if let Some(updated_state) = daemon_playback_state() {
                 if updated_state != playback_state {
                     playback_state = updated_state;
                     dirty = true;
                     eprintln!("[poc] playback state -> {:?}", playback_state);
+                }
+            }
+
+            if let Some(updated_now_playing) = daemon_now_playing() {
+                if updated_now_playing != now_playing {
+                    now_playing = updated_now_playing;
+
+                    match now_playing.as_ref() {
+                        Some(item) => eprintln!(
+                            "[poc] now playing -> {} - {} [{}] ({} ms)",
+                            item.title,
+                            item.artist,
+                            item.id,
+                            item.duration_ms
+                        ),
+                        None => eprintln!("[poc] now playing -> none"),
+                    }
                 }
             }
         }
