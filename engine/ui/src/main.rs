@@ -322,6 +322,32 @@ fn daemon_now_playing() -> Option<Option<NowPlaying>> {
     }))
 }
 
+/// Query the playback position reported by the daemon.
+///
+/// The outer Option indicates whether a valid daemon response was received.
+/// The inner Option is None when no track is loaded.
+fn daemon_playback_position() -> Option<Option<u32>> {
+    let mut s = UnixStream::connect(DAEMON_SOCK).ok()?;
+    s.write_all(b"POSITION\n").ok()?;
+
+    let mut buf = [0u8; 128];
+    let n = s.read(&mut buf).ok()?;
+    let reply = String::from_utf8_lossy(&buf[..n]);
+    let reply = reply.trim();
+
+    if reply == "POSITION NONE" {
+        return Some(None);
+    }
+
+    let position_ms = reply
+        .strip_prefix("POSITION ")?
+        .trim()
+        .parse()
+        .ok()?;
+
+    Some(Some(position_ms))
+}
+
 /// A track fetched from the daemon browse commands.
 #[derive(Clone)]
 struct TrackItem {
@@ -842,6 +868,7 @@ fn main() {
     let mut scroll: usize = 0;
     let mut playback_state = PlaybackState::Unknown;
     let mut now_playing: Option<NowPlaying> = None;
+    let mut playback_position: Option<u32> = None;
     let mut exit_armed = false;
     let title = "Liked Songs";
     let mut battery_percent = read_battery_percent();
@@ -1135,8 +1162,8 @@ BRIGHTNESS_LABELS[brightness_idx]
             }
         }
 
-        // Synchronize playback state and current-track metadata with the
-        // daemon once a second.
+        // Synchronize playback state, current-track metadata, and position
+        // with the daemon once a second.
         if last_status_check.elapsed().as_millis() >= 1000 {
             last_status_check = std::time::Instant::now();
 
@@ -1165,6 +1192,32 @@ BRIGHTNESS_LABELS[brightness_idx]
                     }
                 }
             }
+            if let Some(updated_position) = daemon_playback_position() {
+                if updated_position != playback_position {
+                    let should_log = match (playback_position, updated_position) {
+                        (None, None) => false,
+                        (Some(old), Some(new)) => old / 5000 != new / 5000,
+                        _ => true,
+                    };
+
+                    playback_position = updated_position;
+
+                    if should_log {
+                        match playback_position {
+                            Some(position_ms) => {
+                                eprintln!(
+                                    "[poc] playback position -> {} ms",
+                                    position_ms
+                                )
+                            }
+                            None => {
+                                eprintln!("[poc] playback position -> none")
+                            }
+                        }
+                    }
+                }
+            }
+
         }
 
         // Refresh the battery value every 30 seconds.
