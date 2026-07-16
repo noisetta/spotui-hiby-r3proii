@@ -479,6 +479,7 @@ fn daemon_query(cmd: &str) -> Vec<TrackItem> {
 enum AppView {
     Library,
     Menu,
+    Appearance,
 }
 
 /// Top-level menu tiles.
@@ -489,6 +490,16 @@ const MENU_LABELS: [&str; 6] = [
     "Appearance",
     "Device",
     "Diagnostics",
+];
+
+/// Appearance submenu tiles.
+const APPEARANCE_LABELS: [&str; 6] = [
+    "Forest",
+    "Ocean",
+    "Violet",
+    "Amber",
+    "Monochrome",
+    "Back",
 ];
 
 /// Colours used by the main SpotUI interface.
@@ -567,6 +578,7 @@ fn draw_list(
     let header_title = match app_view {
         AppView::Library => title,
         AppView::Menu => "More",
+        AppView::Appearance => "Appearance",
     };
 
     Text::with_baseline(
@@ -669,9 +681,15 @@ fn draw_list(
         .ok();
     }
 
-    // The top-level menu replaces the visible library area while
-    // preserving the header, now-playing strip, and toolbar.
-    if app_view == AppView::Menu {
+    // Menu screens replace the visible library area while preserving
+    // the header, now-playing strip, and toolbar.
+    let visible_menu_labels = match app_view {
+        AppView::Library => None,
+        AppView::Menu => Some(&MENU_LABELS),
+        AppView::Appearance => Some(&APPEARANCE_LABELS),
+    };
+
+    if let Some(menu_labels) = visible_menu_labels {
         Rectangle::new(
             Point::new(0, 40),
             Size::new(WIDTH as u32, 540),
@@ -683,7 +701,7 @@ fn draw_list(
         let menu_style =
             MonoTextStyle::new(&FONT_9X15_BOLD, palette.text);
 
-        for (index, &label) in MENU_LABELS.iter().enumerate() {
+        for (index, &label) in menu_labels.iter().enumerate() {
             let tile_x = (index % 2) as i32 * 240;
             let tile_y = 40 + (index / 2) as i32 * 180;
 
@@ -873,7 +891,7 @@ fn draw_list(
         if playback_state.is_paused() { "Resume" } else { "Pause" };
     let menu_label = match app_view {
         AppView::Library => "More",
-        AppView::Menu => "Back",
+        AppView::Menu | AppView::Appearance => "Back",
     };
     let button_style =
         MonoTextStyle::new(&FONT_9X15_BOLD, palette.text);
@@ -1271,6 +1289,7 @@ fn main() {
                                             app_view = match app_view {
                                                 AppView::Library => AppView::Menu,
                                                 AppView::Menu => AppView::Library,
+                                                AppView::Appearance => AppView::Menu,
                                             };
                                             dirty = true;
                                             eprintln!(
@@ -1329,7 +1348,7 @@ fn main() {
                                             }
                                         }
                                     }
-                                } else if app_view == AppView::Menu {
+                                } else if app_view != AppView::Library {
                                     exit_armed = false;
 
                                     let safe_x =
@@ -1339,13 +1358,50 @@ fn main() {
                                         ((cur_y - LIST_TOP) / 180) as usize;
                                     let menu_index = row * 2 + column;
 
+                                    let menu_labels =
+                                        if app_view == AppView::Menu {
+                                            &MENU_LABELS
+                                        } else {
+                                            &APPEARANCE_LABELS
+                                        };
+
                                     if let Some(label) =
-                                        MENU_LABELS.get(menu_index)
+                                        menu_labels.get(menu_index)
                                     {
-                                        eprintln!(
-                                            "[poc] menu placeholder -> {}",
-                                            label
-                                        );
+                                        match app_view {
+                                            AppView::Menu => {
+                                                if menu_index == 3 {
+                                                    app_view =
+                                                        AppView::Appearance;
+                                                    dirty = true;
+                                                    eprintln!(
+                                                        "[poc] app view -> {:?}",
+                                                        app_view
+                                                    );
+                                                } else {
+                                                    eprintln!(
+                                                        "[poc] menu placeholder -> {}",
+                                                        label
+                                                    );
+                                                }
+                                            }
+                                            AppView::Appearance => {
+                                                if menu_index == 5 {
+                                                    app_view = AppView::Menu;
+                                                    dirty = true;
+                                                    eprintln!(
+                                                        "[poc] app view -> {:?}",
+                                                        app_view
+                                                    );
+                                                } else {
+                                                    eprintln!(
+                                                        "[poc] appearance placeholder -> {}",
+                                                        label
+                                                    );
+                                                }
+                                            }
+                                            AppView::Library => {}
+                                        }
                                     }
                                 } else {
                                     let rel = cur_y - LIST_TOP;
