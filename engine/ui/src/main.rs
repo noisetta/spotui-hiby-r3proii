@@ -483,6 +483,38 @@ enum AppView {
     Special,
 }
 
+/// Stable identity for every built-in SpotUI colour theme.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Theme {
+    Forest,
+    Ocean,
+    Violet,
+    Amber,
+    Monochrome,
+    DurandalTerminal,
+    Synthwave,
+    Sunset,
+    Ice,
+    Crimson,
+}
+
+impl Theme {
+    fn palette(self) -> Palette {
+        match self {
+            Theme::Forest => Palette::forest(),
+            Theme::Ocean => Palette::ocean(),
+            Theme::Violet => Palette::violet(),
+            Theme::Amber => Palette::amber(),
+            Theme::Monochrome => Palette::monochrome(),
+            Theme::DurandalTerminal => Palette::durandal_terminal(),
+            Theme::Synthwave => Palette::synthwave(),
+            Theme::Sunset => Palette::sunset(),
+            Theme::Ice => Palette::ice(),
+            Theme::Crimson => Palette::crimson(),
+        }
+    }
+}
+
 /// Top-level menu tiles.
 const MENU_LABELS: [&str; 6] = [
     "Playback",
@@ -1266,7 +1298,8 @@ fn main() {
     let mut playback_state = PlaybackState::Unknown;
     let mut now_playing: Option<NowPlaying> = None;
     let mut playback_position: Option<u32> = None;
-    let mut palette = Palette::forest();
+    let mut theme = Theme::Forest;
+    let mut palette = theme.palette();
     let mut app_view = AppView::Library;
     let mut exit_armed = false;
     let title = "Liked Songs";
@@ -1570,30 +1603,32 @@ fn main() {
                                                         app_view
                                                     );
                                                 } else {
-                                                    let updated_palette =
+                                                    let updated_theme =
                                                         match menu_index {
                                                             0 => Some(
-                                                                Palette::forest(),
+                                                                Theme::Forest,
                                                             ),
                                                             1 => Some(
-                                                                Palette::ocean(),
+                                                                Theme::Ocean,
                                                             ),
                                                             2 => Some(
-                                                                Palette::violet(),
+                                                                Theme::Violet,
                                                             ),
                                                             3 => Some(
-                                                                Palette::amber(),
+                                                                Theme::Amber,
                                                             ),
                                                             4 => Some(
-                                                                Palette::monochrome(),
+                                                                Theme::Monochrome,
                                                             ),
                                                             _ => None,
                                                         };
 
                                                     if let Some(updated) =
-                                                        updated_palette
+                                                        updated_theme
                                                     {
-                                                        palette = updated;
+                                                        theme = updated;
+                                                        palette =
+                                                            theme.palette();
                                                         dirty = true;
                                                         eprintln!(
                                                             "[poc] theme -> {}",
@@ -1615,23 +1650,23 @@ fn main() {
                                                     let updated_theme =
                                                         match menu_index {
                                                             0 => Some((
-                                                                Palette::durandal_terminal(),
+                                                                Theme::DurandalTerminal,
                                                                 "Durandal Terminal",
                                                             )),
                                                             1 => Some((
-                                                                Palette::synthwave(),
+                                                                Theme::Synthwave,
                                                                 "Synthwave",
                                                             )),
                                                             2 => Some((
-                                                                Palette::sunset(),
+                                                                Theme::Sunset,
                                                                 "Sunset",
                                                             )),
                                                             3 => Some((
-                                                                Palette::ice(),
+                                                                Theme::Ice,
                                                                 "Ice",
                                                             )),
                                                             4 => Some((
-                                                                Palette::crimson(),
+                                                                Theme::Crimson,
                                                                 "Crimson",
                                                             )),
                                                             _ => None,
@@ -1642,7 +1677,9 @@ fn main() {
                                                         theme_name,
                                                     )) = updated_theme
                                                     {
-                                                        palette = updated;
+                                                        theme = updated;
+                                                        palette =
+                                                            theme.palette();
                                                         dirty = true;
                                                         eprintln!(
                                                             "[poc] theme -> {}",
