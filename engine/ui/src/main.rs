@@ -474,6 +474,46 @@ fn daemon_query(cmd: &str) -> Vec<TrackItem> {
     items
 }
 
+/// Colours used by the main SpotUI interface.
+///
+/// Keeping these values together allows complete theme presets to be added
+/// without scattering theme-specific checks throughout the drawing code.
+#[derive(Clone, Copy)]
+struct Palette {
+    background: Rgb565,
+    header: Rgb565,
+    header_text: Rgb565,
+    text: Rgb565,
+    selected_row: Rgb565,
+    selected_text: Rgb565,
+    now_playing: Rgb565,
+    progress_track: Rgb565,
+    progress_fill: Rgb565,
+    separator: Rgb565,
+    toolbar: Rgb565,
+    border: Rgb565,
+}
+
+impl Palette {
+    /// Original SpotUI green palette.
+    fn forest() -> Self {
+        Self {
+            background: Rgb565::new(0, 0, 12),
+            header: Rgb565::new(0, 63, 0),
+            header_text: Rgb565::BLACK,
+            text: Rgb565::WHITE,
+            selected_row: Rgb565::new(0, 45, 45),
+            selected_text: Rgb565::BLACK,
+            now_playing: Rgb565::new(0, 18, 8),
+            progress_track: Rgb565::CSS_DARK_GRAY,
+            progress_fill: Rgb565::new(0, 63, 0),
+            separator: Rgb565::new(0, 24, 0),
+            toolbar: Rgb565::new(0, 38, 0),
+            border: Rgb565::CSS_DARK_GRAY,
+        }
+    }
+}
+
 /// Number of track rows visible above the now-playing strip.
 /// Nine 60-pixel rows leave 60 pixels for current-track metadata.
 const VISIBLE_ROWS: usize = 9;
@@ -491,20 +531,21 @@ fn draw_list(
     playback_state: PlaybackState,
     now_playing: Option<&NowPlaying>,
     playback_position: Option<u32>,
+    palette: &Palette,
     exit_armed: bool,
 ) {
     // Clear to dark blue.
     Rectangle::new(Point::zero(), Size::new(WIDTH as u32, HEIGHT as u32))
-        .into_styled(PrimitiveStyle::with_fill(Rgb565::new(0, 0, 12)))
+        .into_styled(PrimitiveStyle::with_fill(palette.background))
         .draw(fb)
         .ok();
 
     // Green header bar with a title.
     Rectangle::new(Point::zero(), Size::new(WIDTH as u32, 40))
-        .into_styled(PrimitiveStyle::with_fill(Rgb565::new(0, 63, 0)))
+        .into_styled(PrimitiveStyle::with_fill(palette.header))
         .draw(fb)
         .ok();
-    let header_style = MonoTextStyle::new(&FONT_9X15_BOLD, Rgb565::BLACK);
+    let header_style = MonoTextStyle::new(&FONT_9X15_BOLD, palette.header_text);
     Text::with_baseline(title, Point::new(6, 12), header_style, Baseline::Top)
         .draw(fb)
         .ok();
@@ -542,8 +583,8 @@ fn draw_list(
     .draw(fb)
     .ok();
 
-    let text_style = MonoTextStyle::new(&FONT_9X15, Rgb565::WHITE);
-    let sel_style = MonoTextStyle::new(&FONT_9X15_BOLD, Rgb565::BLACK);
+    let text_style = MonoTextStyle::new(&FONT_9X15, palette.text);
+    let sel_style = MonoTextStyle::new(&FONT_9X15_BOLD, palette.selected_text);
 
     // Render the visible window of items.
     let end = (scroll + VISIBLE_ROWS).min(items.len());
@@ -557,7 +598,7 @@ fn draw_list(
 
         if is_sel {
             Rectangle::new(Point::new(0, y), Size::new(WIDTH as u32, ROW_HEIGHT as u32))
-                .into_styled(PrimitiveStyle::with_fill(Rgb565::new(0, 45, 45)))
+                .into_styled(PrimitiveStyle::with_fill(palette.selected_row))
                 .draw(fb)
                 .ok();
             let selected_label = format!("> {}", label);
@@ -571,7 +612,7 @@ fn draw_list(
         }
         // separator line
         Rectangle::new(Point::new(0, y + ROW_HEIGHT - 1), Size::new(WIDTH as u32, 1))
-            .into_styled(PrimitiveStyle::with_fill(Rgb565::CSS_DARK_GRAY))
+            .into_styled(PrimitiveStyle::with_fill(palette.border))
             .draw(fb)
             .ok();
     }
@@ -606,7 +647,7 @@ fn draw_list(
         Point::new(0, now_playing_y),
         Size::new(WIDTH as u32, 60),
     )
-    .into_styled(PrimitiveStyle::with_fill(Rgb565::new(0, 18, 8)))
+    .into_styled(PrimitiveStyle::with_fill(palette.now_playing))
     .draw(fb)
     .ok();
 
@@ -635,7 +676,7 @@ fn draw_list(
                 truncate_label(artist_source, artist_max_chars);
 
             let now_title_style =
-                MonoTextStyle::new(&FONT_9X15_BOLD, Rgb565::WHITE);
+                MonoTextStyle::new(&FONT_9X15_BOLD, palette.text);
 
             Text::with_baseline(
                 &now_title,
@@ -676,7 +717,7 @@ fn draw_list(
                 Size::new(progress_width, 4),
             )
             .into_styled(PrimitiveStyle::with_fill(
-                Rgb565::CSS_DARK_GRAY,
+                palette.progress_track,
             ))
             .draw(fb)
             .ok();
@@ -693,7 +734,7 @@ fn draw_list(
                         Size::new(filled_width, 4),
                     )
                     .into_styled(PrimitiveStyle::with_fill(
-                        Rgb565::new(0, 63, 0),
+                        palette.progress_fill,
                     ))
                     .draw(fb)
                     .ok();
@@ -718,7 +759,7 @@ fn draw_list(
         Point::new(0, down_strip_y),
         Size::new(WIDTH as u32, 20),
     )
-    .into_styled(PrimitiveStyle::with_fill(Rgb565::new(0, 24, 0)))
+    .into_styled(PrimitiveStyle::with_fill(palette.separator))
     .draw(fb)
     .ok();
 
@@ -728,13 +769,13 @@ fn draw_list(
         Point::new(0, toolbar_y),
         Size::new(WIDTH as u32, 60),
     )
-    .into_styled(PrimitiveStyle::with_fill(Rgb565::new(0, 38, 0)))
+    .into_styled(PrimitiveStyle::with_fill(palette.toolbar))
     .draw(fb)
     .ok();
 
     for x in [120, 240, 360] {
         Rectangle::new(Point::new(x, toolbar_y), Size::new(1, 60))
-            .into_styled(PrimitiveStyle::with_fill(Rgb565::CSS_DARK_GRAY))
+            .into_styled(PrimitiveStyle::with_fill(palette.border))
             .draw(fb)
             .ok();
     }
@@ -743,7 +784,7 @@ fn draw_list(
     let brightness_label =
         format!("Bright {}", BRIGHTNESS_LABELS[brightness_idx]);
     let playback_label = if playback_state.is_paused() { "Resume" } else { "Pause" };
-    let button_style = MonoTextStyle::new(&FONT_9X15_BOLD, Rgb565::WHITE);
+    let button_style = MonoTextStyle::new(&FONT_9X15_BOLD, palette.text);
 
     Text::with_baseline(
         exit_label,
@@ -937,6 +978,7 @@ fn main() {
     let mut playback_state = PlaybackState::Unknown;
     let mut now_playing: Option<NowPlaying> = None;
     let mut playback_position: Option<u32> = None;
+    let palette = Palette::forest();
     let mut exit_armed = false;
     let title = "Liked Songs";
     let mut battery_percent = read_battery_percent();
@@ -951,6 +993,7 @@ fn main() {
         playback_state,
         now_playing.as_ref(),
         playback_position,
+        &palette,
         exit_armed,
     );
     eprintln!("[poc] drew initial list");
@@ -1387,6 +1430,7 @@ BRIGHTNESS_LABELS[brightness_idx]
                 playback_state,
                 now_playing.as_ref(),
                 playback_position,
+                &palette,
                 exit_armed,
             );
             last_flush = std::time::Instant::now();
