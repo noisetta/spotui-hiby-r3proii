@@ -480,6 +480,7 @@ enum AppView {
     Library,
     Menu,
     Appearance,
+    Special,
 }
 
 /// Top-level menu tiles.
@@ -499,6 +500,16 @@ const APPEARANCE_LABELS: [&str; 6] = [
     "Violet",
     "Amber",
     "Monochrome",
+    "Special",
+];
+
+/// Special theme submenu tiles.
+const SPECIAL_LABELS: [&str; 6] = [
+    "Durandal",
+    "Synthwave",
+    "Sunset",
+    "Ice",
+    "Crimson",
     "Back",
 ];
 
@@ -651,6 +662,7 @@ fn draw_list(
         AppView::Library => title,
         AppView::Menu => "More",
         AppView::Appearance => "Appearance",
+        AppView::Special => "Special",
     };
 
     Text::with_baseline(
@@ -759,6 +771,7 @@ fn draw_list(
         AppView::Library => None,
         AppView::Menu => Some(&MENU_LABELS),
         AppView::Appearance => Some(&APPEARANCE_LABELS),
+        AppView::Special => Some(&SPECIAL_LABELS),
     };
 
     if let Some(menu_labels) = visible_menu_labels {
@@ -963,7 +976,7 @@ fn draw_list(
         if playback_state.is_paused() { "Resume" } else { "Pause" };
     let menu_label = match app_view {
         AppView::Library => "More",
-        AppView::Menu | AppView::Appearance => "Back",
+        AppView::Menu | AppView::Appearance | AppView::Special => "Back",
     };
     let button_style =
         MonoTextStyle::new(&FONT_9X15_BOLD, palette.text);
@@ -1362,6 +1375,7 @@ fn main() {
                                                 AppView::Library => AppView::Menu,
                                                 AppView::Menu => AppView::Library,
                                                 AppView::Appearance => AppView::Menu,
+                                                AppView::Special => AppView::Appearance,
                                             };
                                             dirty = true;
                                             eprintln!(
@@ -1430,12 +1444,12 @@ fn main() {
                                         ((cur_y - LIST_TOP) / 180) as usize;
                                     let menu_index = row * 2 + column;
 
-                                    let menu_labels =
-                                        if app_view == AppView::Menu {
-                                            &MENU_LABELS
-                                        } else {
-                                            &APPEARANCE_LABELS
-                                        };
+                                    let menu_labels = match app_view {
+                                        AppView::Menu => &MENU_LABELS,
+                                        AppView::Appearance => &APPEARANCE_LABELS,
+                                        AppView::Special => &SPECIAL_LABELS,
+                                        AppView::Library => &MENU_LABELS,
+                                    };
 
                                     if let Some(label) =
                                         menu_labels.get(menu_index)
@@ -1459,7 +1473,7 @@ fn main() {
                                             }
                                             AppView::Appearance => {
                                                 if menu_index == 5 {
-                                                    app_view = AppView::Menu;
+                                                    app_view = AppView::Special;
                                                     dirty = true;
                                                     eprintln!(
                                                         "[poc] app view -> {:?}",
@@ -1496,6 +1510,22 @@ fn main() {
                                                             label
                                                         );
                                                     }
+                                                }
+                                            }
+                                            AppView::Special => {
+                                                if menu_index == 5 {
+                                                    app_view =
+                                                        AppView::Appearance;
+                                                    dirty = true;
+                                                    eprintln!(
+                                                        "[poc] app view -> {:?}",
+                                                        app_view
+                                                    );
+                                                } else {
+                                                    eprintln!(
+                                                        "[poc] special placeholder -> {}",
+                                                        label
+                                                    );
                                                 }
                                             }
                                             AppView::Library => {}
