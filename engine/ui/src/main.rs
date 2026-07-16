@@ -235,10 +235,37 @@ fn daemon_send(cmd: &str) {
     }
 }
 
-/// Query whether the daemon reports playback as paused.
-/// Other known states are treated as not paused. Connection failures return
-/// None so startup polling remains quiet until the daemon is available.
-fn daemon_paused() -> Option<bool> {
+/// Current playback state reported by the daemon.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum PlaybackState {
+    Unknown,
+    Stopped,
+    Loading,
+    Playing,
+    Paused,
+    Error,
+}
+
+impl PlaybackState {
+    fn from_status_reply(reply: &str) -> Option<Self> {
+        match reply {
+            "STATUS STOPPED" => Some(Self::Stopped),
+            "STATUS LOADING" => Some(Self::Loading),
+            "STATUS PLAYING" => Some(Self::Playing),
+            "STATUS PAUSED" => Some(Self::Paused),
+            "STATUS ERROR" => Some(Self::Error),
+            _ => None,
+        }
+    }
+
+    fn is_paused(self) -> bool {
+        self == Self::Paused
+    }
+}
+
+/// Query the playback state reported by the daemon. Connection failures
+/// return None so startup polling remains quiet until the daemon is available.
+fn daemon_playback_state() -> Option<PlaybackState> {
     let mut s = UnixStream::connect(DAEMON_SOCK).ok()?;
     s.write_all(b"STATUS\n").ok()?;
 
@@ -246,14 +273,7 @@ fn daemon_paused() -> Option<bool> {
     let n = s.read(&mut buf).ok()?;
     let reply = String::from_utf8_lossy(&buf[..n]);
 
-    match reply.trim() {
-        "STATUS PAUSED" => Some(true),
-        "STATUS STOPPED"
-        | "STATUS LOADING"
-        | "STATUS PLAYING"
-        | "STATUS ERROR" => Some(false),
-        _ => None,
-    }
+    PlaybackState::from_status_reply(reply.trim())
 }
 
 /// A track fetched from the daemon's browse commands.
@@ -389,7 +409,7 @@ fn draw_list(
     title: &str,
     battery_percent: Option<u8>,
     brightness_idx: usize,
-    paused: bool,
+    playback_state: PlaybackState,
     exit_armed: bool,
 ) {
     // Clear to dark blue.
@@ -510,7 +530,7 @@ fn draw_list(
     let exit_label = if exit_armed { "Confirm" } else { "Exit" };
     let brightness_label =
         format!("Bright {}", BRIGHTNESS_LABELS[brightness_idx]);
-    let playback_label = if paused { "Resume" } else { "Pause" };
+    let playback_label = if playback_state.is_paused() { "Resume" } else { "Pause" };
     let button_style = MonoTextStyle::new(&FONT_9X15_BOLD, Rgb565::WHITE);
 
     Text::with_baseline(
@@ -702,7 +722,7 @@ fn main() {
     let mut brightness_idx: usize = load_brightness_idx();
     let mut selected: Option<usize> = None;
     let mut scroll: usize = 0;
-    let mut paused = false;
+    let mut playback_state = PlaybackState::Unknown;
     let mut exit_armed = false;
     let title = "Liked Songs";
     let mut battery_percent = read_battery_percent();
@@ -714,7 +734,7 @@ fn main() {
         title,
         battery_percent,
         brightness_idx,
-        paused,
+        playback_state,
         exit_armed,
     );
     eprintln!("[poc] drew initial list");
@@ -872,7 +892,7 @@ fn main() {
                                         }
                                         2 => {
                                             exit_armed = false;
-                                            if paused {
+                                            if playback_state.is_paused() {
                                                 daemon_send("PLAY");
                                                 eprintln!("[poc] toolbar resume");
                                             } else {
@@ -995,14 +1015,14 @@ BRIGHTNESS_LABELS[brightness_idx]
             }
         }
 
-        // Synchronize the Pause/Resume label with the daemon once a second.
+        // Synchronize playback state with the daemon once a second.
         if last_status_check.elapsed().as_millis() >= 1000 {
             last_status_check = std::time::Instant::now();
-            if let Some(updated_paused) = daemon_paused() {
-                if updated_paused != paused {
-                    paused = updated_paused;
+            if let Some(updated_state) = daemon_playback_state() {
+                if updated_state != playback_state {
+                    playback_state = updated_state;
                     dirty = true;
-                    eprintln!("[poc] playback paused -> {}", paused);
+                    eprintln!("[poc] playback state -> {:?}", playback_state);
                 }
             }
         }
@@ -1051,7 +1071,7 @@ BRIGHTNESS_LABELS[brightness_idx]
                 title,
                 battery_percent,
                 brightness_idx,
-                paused,
+                playback_state,
                 exit_armed,
             );
             last_flush = std::time::Instant::now();
