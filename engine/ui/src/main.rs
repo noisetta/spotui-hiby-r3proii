@@ -441,9 +441,9 @@ fn daemon_query(cmd: &str) -> Vec<TrackItem> {
     items
 }
 
-/// Number of track rows visible on screen at once (below the header).
-/// (720 - 40 header) / 60 per row = ~11.
-const VISIBLE_ROWS: usize = 10;
+/// Number of track rows visible above the now-playing strip.
+/// Nine 60-pixel rows leave 60 pixels for current-track metadata.
+const VISIBLE_ROWS: usize = 9;
 
 /// Draw the track list with scrolling. `scroll` is the index of the first
 /// visible item; `selected` highlights one row (absolute index).
@@ -456,6 +456,7 @@ fn draw_list(
     battery_percent: Option<u8>,
     brightness_idx: usize,
     playback_state: PlaybackState,
+    now_playing: Option<&NowPlaying>,
     exit_armed: bool,
 ) {
     // Clear to dark blue.
@@ -563,6 +564,58 @@ fn draw_list(
         )
         .draw(fb)
         .ok();
+    }
+
+    // Dedicated current-track strip between the list and toolbar.
+    let now_playing_y = HEIGHT as i32 - 140;
+    Rectangle::new(
+        Point::new(0, now_playing_y),
+        Size::new(WIDTH as u32, 60),
+    )
+    .into_styled(PrimitiveStyle::with_fill(Rgb565::new(0, 18, 8)))
+    .draw(fb)
+    .ok();
+
+    match now_playing {
+        Some(item) => {
+            let now_title = truncate_label(&item.title, 50);
+            let now_artist = if item.artist.is_empty() {
+                "Unknown artist".to_string()
+            } else {
+                truncate_label(&item.artist, 52)
+            };
+
+            let now_title_style =
+                MonoTextStyle::new(&FONT_9X15_BOLD, Rgb565::WHITE);
+
+            Text::with_baseline(
+                &now_title,
+                Point::new(10, now_playing_y + 8),
+                now_title_style,
+                Baseline::Top,
+            )
+            .draw(fb)
+            .ok();
+
+            Text::with_baseline(
+                &now_artist,
+                Point::new(10, now_playing_y + 32),
+                text_style,
+                Baseline::Top,
+            )
+            .draw(fb)
+            .ok();
+        }
+        None => {
+            Text::with_baseline(
+                "Nothing playing",
+                Point::new(10, now_playing_y + 22),
+                text_style,
+                Baseline::Top,
+            )
+            .draw(fb)
+            .ok();
+        }
     }
 
     // Non-interactive separator immediately above the toolbar.
@@ -801,6 +854,7 @@ fn main() {
         battery_percent,
         brightness_idx,
         playback_state,
+        now_playing.as_ref(),
         exit_armed,
     );
     eprintln!("[poc] drew initial list");
@@ -1097,6 +1151,7 @@ BRIGHTNESS_LABELS[brightness_idx]
             if let Some(updated_now_playing) = daemon_now_playing() {
                 if updated_now_playing != now_playing {
                     now_playing = updated_now_playing;
+                    dirty = true;
 
                     match now_playing.as_ref() {
                         Some(item) => eprintln!(
@@ -1157,6 +1212,7 @@ BRIGHTNESS_LABELS[brightness_idx]
                 battery_percent,
                 brightness_idx,
                 playback_state,
+                now_playing.as_ref(),
                 exit_armed,
             );
             last_flush = std::time::Instant::now();
