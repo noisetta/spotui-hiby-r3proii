@@ -110,11 +110,13 @@ fi
 # self-healing -- the UI stays up showing "Connecting..." and picks up the
 # liked-songs list on its next retry once a daemon attempt finally succeeds.
 rm -f "$SOCK"
-mkdir -p /usr/data/tmp
+SPOTUI_TMP=/tmp/spotui
+rm -rf "$SPOTUI_TMP"
+mkdir -p "$SPOTUI_TMP"
 (
     while true; do
         echo "[start] (re)starting daemon+aplay"
-        TMPDIR=/usr/data/tmp "$LOADER" "$DAEMON" 2>>"$DAEMON_LOG" \
+        TMPDIR="$SPOTUI_TMP" "$LOADER" "$DAEMON" 2>>"$DAEMON_LOG" \
             | aplay -D hw:0,0 -f S16_LE -r 44100 -c 2
         echo "[start] daemon exited; retrying in 5s"
         sleep 5
