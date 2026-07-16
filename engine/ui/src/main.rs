@@ -540,6 +540,78 @@ impl Palette {
             border: Rgb565::CSS_DARK_GRAY,
         }
     }
+
+    /// Deep blue and cyan palette.
+    fn ocean() -> Self {
+        Self {
+            background: Rgb565::new(0, 4, 12),
+            header: Rgb565::new(0, 45, 31),
+            header_text: Rgb565::BLACK,
+            text: Rgb565::WHITE,
+            selected_row: Rgb565::new(0, 34, 31),
+            selected_text: Rgb565::BLACK,
+            now_playing: Rgb565::new(0, 12, 18),
+            progress_track: Rgb565::CSS_DARK_GRAY,
+            progress_fill: Rgb565::new(0, 45, 31),
+            separator: Rgb565::new(0, 16, 22),
+            toolbar: Rgb565::new(0, 26, 28),
+            border: Rgb565::CSS_DARK_GRAY,
+        }
+    }
+
+    /// Dark violet palette.
+    fn violet() -> Self {
+        Self {
+            background: Rgb565::new(5, 0, 12),
+            header: Rgb565::new(23, 18, 31),
+            header_text: Rgb565::WHITE,
+            text: Rgb565::WHITE,
+            selected_row: Rgb565::new(20, 16, 29),
+            selected_text: Rgb565::WHITE,
+            now_playing: Rgb565::new(9, 3, 16),
+            progress_track: Rgb565::CSS_DARK_GRAY,
+            progress_fill: Rgb565::new(26, 24, 31),
+            separator: Rgb565::new(11, 5, 19),
+            toolbar: Rgb565::new(15, 9, 25),
+            border: Rgb565::CSS_DARK_GRAY,
+        }
+    }
+
+    /// Warm amber palette.
+    fn amber() -> Self {
+        Self {
+            background: Rgb565::new(10, 4, 0),
+            header: Rgb565::new(31, 46, 0),
+            header_text: Rgb565::BLACK,
+            text: Rgb565::WHITE,
+            selected_row: Rgb565::new(31, 32, 0),
+            selected_text: Rgb565::BLACK,
+            now_playing: Rgb565::new(14, 8, 0),
+            progress_track: Rgb565::CSS_DARK_GRAY,
+            progress_fill: Rgb565::new(31, 46, 0),
+            separator: Rgb565::new(18, 11, 0),
+            toolbar: Rgb565::new(24, 18, 0),
+            border: Rgb565::CSS_DARK_GRAY,
+        }
+    }
+
+    /// Neutral black, white, and gray palette.
+    fn monochrome() -> Self {
+        Self {
+            background: Rgb565::BLACK,
+            header: Rgb565::WHITE,
+            header_text: Rgb565::BLACK,
+            text: Rgb565::WHITE,
+            selected_row: Rgb565::new(24, 48, 24),
+            selected_text: Rgb565::BLACK,
+            now_playing: Rgb565::new(4, 8, 4),
+            progress_track: Rgb565::CSS_DARK_GRAY,
+            progress_fill: Rgb565::WHITE,
+            separator: Rgb565::new(8, 16, 8),
+            toolbar: Rgb565::new(12, 24, 12),
+            border: Rgb565::CSS_DARK_GRAY,
+        }
+    }
 }
 
 /// Number of track rows visible above the now-playing strip.
@@ -1091,7 +1163,7 @@ fn main() {
     let mut playback_state = PlaybackState::Unknown;
     let mut now_playing: Option<NowPlaying> = None;
     let mut playback_position: Option<u32> = None;
-    let palette = Palette::forest();
+    let mut palette = Palette::forest();
     let mut app_view = AppView::Library;
     let mut exit_armed = false;
     let title = "Liked Songs";
@@ -1394,10 +1466,36 @@ fn main() {
                                                         app_view
                                                     );
                                                 } else {
-                                                    eprintln!(
-                                                        "[poc] appearance placeholder -> {}",
-                                                        label
-                                                    );
+                                                    let updated_palette =
+                                                        match menu_index {
+                                                            0 => Some(
+                                                                Palette::forest(),
+                                                            ),
+                                                            1 => Some(
+                                                                Palette::ocean(),
+                                                            ),
+                                                            2 => Some(
+                                                                Palette::violet(),
+                                                            ),
+                                                            3 => Some(
+                                                                Palette::amber(),
+                                                            ),
+                                                            4 => Some(
+                                                                Palette::monochrome(),
+                                                            ),
+                                                            _ => None,
+                                                        };
+
+                                                    if let Some(updated) =
+                                                        updated_palette
+                                                    {
+                                                        palette = updated;
+                                                        dirty = true;
+                                                        eprintln!(
+                                                            "[poc] theme -> {}",
+                                                            label
+                                                        );
+                                                    }
                                                 }
                                             }
                                             AppView::Library => {}
