@@ -31,21 +31,94 @@ KEEPALIVE_MS=200
 
 echo "[start] SpotUI launcher"
 
-# --- 0. Wait for hiby_player's codec init (gate on UPTIME, not sleep) --------
-# S99spotui's delay counts from init, which is long before hiby_player has
-# actually started; killing hiby_player mid-codec-init leaves the DAC in a
-# broken state for the entire boot (even raw static is silent afterwards).
-# Gating on system uptime guarantees hiby_player has had enough real runtime
-# to finish initialising the codec, regardless of when init launched us.
-# Panel stays lit throughout thanks to the "Stay on" backlight setting.
-UPTIME_GATE=60
-echo "[start] waiting for uptime >= ${UPTIME_GATE}s"
+# --- 0. Wait for HiBy hardware readiness ------------------------------------
+# Stopping hiby_player during codec initialization can leave the DAC unusable
+# until reboot. Require a minimum uptime plus stable HiBy, framebuffer, ALSA,
+# mixer-control, and mixer-state signals before taking over.
+#
+# The 60-second limit remains only as a fallback if readiness cannot be
+# established. The detached entry-point keeps HiBy responsive while waiting.
+MIN_UPTIME=20
+FALLBACK_UPTIME=60
+READY_STREAK_REQUIRED=3
+
+ready_streak=0
+last_mixer_hash=
+
+echo "[start] waiting for HiBy hardware readiness"
+echo "[start] minimum uptime ${MIN_UPTIME}s; fallback ${FALLBACK_UPTIME}s"
+
 while true; do
     up=$(cut -d. -f1 /proc/uptime)
-    [ "$up" -ge "$UPTIME_GATE" ] && break
-    sleep 2
+
+    if [ "$up" -ge "$FALLBACK_UPTIME" ]; then
+        echo "[start] readiness fallback reached (${up}s)"
+        break
+    fi
+
+    ready=1
+
+    hiby_pid=$(pidof hiby_player 2>/dev/null | awk "{ print \$1 }")
+    threads=0
+    framebuffer_owned=0
+    controls=0
+    mixer_hash=
+
+    [ "$up" -ge "$MIN_UPTIME" ] || ready=0
+    [ -n "$hiby_pid" ] || ready=0
+
+    if [ -n "$hiby_pid" ] && [ -d "/proc/$hiby_pid" ]; then
+        threads=$(awk "/^Threads:/ { print \$2 }" "/proc/$hiby_pid/status" 2>/dev/null)
+
+        for descriptor in "/proc/$hiby_pid"/fd/*; do
+            [ "$(readlink "$descriptor" 2>/dev/null)" = "/dev/fb0" ] || continue
+            framebuffer_owned=1
+            break
+        done
+    fi
+
+    [ "${threads:-0}" -ge 20 ] 2>/dev/null || ready=0
+    [ "$framebuffer_owned" -eq 1 ] || ready=0
+
+    [ -e /dev/snd/controlC0 ] || ready=0
+    [ -e /dev/snd/pcmC0D0p ] || ready=0
+
+    controls=$(amixer -c 0 controls 2>/dev/null | wc -l | tr -d " ")
+    [ "${controls:-0}" -ge 10 ] 2>/dev/null || ready=0
+
+    amixer -c 0 cget numid=9 >/dev/null 2>&1 || ready=0
+
+    mixer_hash=$(amixer -c 0 contents 2>/dev/null |
+        sha256sum |
+        awk "{ print \$1 }")
+
+    [ -n "$mixer_hash" ] || ready=0
+
+    if [ "$ready" -eq 1 ]; then
+        if [ "$mixer_hash" = "$last_mixer_hash" ]; then
+            ready_streak=$((ready_streak + 1))
+        else
+            ready_streak=1
+        fi
+
+        last_mixer_hash=$mixer_hash
+
+        echo "[start] readiness ${ready_streak}/${READY_STREAK_REQUIRED} at ${up}s pid=${hiby_pid} threads=${threads} controls=${controls}"
+    else
+        if [ "$ready_streak" -ne 0 ]; then
+            echo "[start] readiness reset at ${up}s"
+        fi
+
+        ready_streak=0
+        last_mixer_hash=
+    fi
+
+    [ "$ready_streak" -ge "$READY_STREAK_REQUIRED" ] && break
+
+    sleep 1
 done
-echo "[start] uptime gate passed (${up}s)"
+
+echo "[start] readiness gate passed (${up}s)"
 
 # --- 1. Kill hiby_player -----------------------------------------------------
 for pid in $(ps | grep hiby_player | grep -v grep | awk '{print $1}'); do
