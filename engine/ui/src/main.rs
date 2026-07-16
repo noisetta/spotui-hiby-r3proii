@@ -511,6 +511,7 @@ enum AppView {
     Menu,
     Appearance,
     Special,
+    Diagnostics,
 }
 
 /// Stable identity for every built-in SpotUI colour theme.
@@ -604,6 +605,16 @@ const SPECIAL_LABELS: [&str; 6] = [
     "Sunset",
     "Ice",
     "Crimson",
+    "Back",
+];
+
+/// Diagnostics submenu tiles.
+const DIAGNOSTICS_LABELS: [&str; 6] = [
+    "Daemon",
+    "Storage",
+    "Memory",
+    "Audio",
+    "About",
     "Back",
 ];
 
@@ -848,6 +859,7 @@ fn draw_list(
         AppView::Menu => "More",
         AppView::Appearance => "Appearance",
         AppView::Special => "Special",
+        AppView::Diagnostics => "Diagnostics",
     };
 
     Text::with_baseline(
@@ -957,6 +969,7 @@ fn draw_list(
         AppView::Menu => Some(&MENU_LABELS),
         AppView::Appearance => Some(&APPEARANCE_LABELS),
         AppView::Special => Some(&SPECIAL_LABELS),
+        AppView::Diagnostics => Some(&DIAGNOSTICS_LABELS),
     };
 
     if let Some(menu_labels) = visible_menu_labels {
@@ -1018,7 +1031,9 @@ fn draw_list(
                     4 => active_theme == Theme::Crimson,
                     _ => false,
                 },
-                AppView::Library | AppView::Menu => false,
+                AppView::Library
+                | AppView::Menu
+                | AppView::Diagnostics => false,
             };
 
             let display_label = if is_active_theme {
@@ -1187,7 +1202,10 @@ fn draw_list(
         if playback_state.is_paused() { "Resume" } else { "Pause" };
     let menu_label = match app_view {
         AppView::Library => "More",
-        AppView::Menu | AppView::Appearance | AppView::Special => "Back",
+        AppView::Menu
+        | AppView::Appearance
+        | AppView::Special
+        | AppView::Diagnostics => "Back",
     };
     let button_style =
         MonoTextStyle::new(&FONT_9X15_BOLD, palette.text);
@@ -1590,6 +1608,7 @@ fn main() {
                                                 AppView::Menu => AppView::Library,
                                                 AppView::Appearance => AppView::Menu,
                                                 AppView::Special => AppView::Appearance,
+                                                AppView::Diagnostics => AppView::Menu,
                                             };
                                             dirty = true;
                                             eprintln!(
@@ -1662,6 +1681,7 @@ fn main() {
                                         AppView::Menu => &MENU_LABELS,
                                         AppView::Appearance => &APPEARANCE_LABELS,
                                         AppView::Special => &SPECIAL_LABELS,
+                                        AppView::Diagnostics => &DIAGNOSTICS_LABELS,
                                         AppView::Library => &MENU_LABELS,
                                     };
 
@@ -1670,19 +1690,31 @@ fn main() {
                                     {
                                         match app_view {
                                             AppView::Menu => {
-                                                if menu_index == 3 {
-                                                    app_view =
-                                                        AppView::Appearance;
-                                                    dirty = true;
-                                                    eprintln!(
-                                                        "[poc] app view -> {:?}",
-                                                        app_view
-                                                    );
-                                                } else {
-                                                    eprintln!(
-                                                        "[poc] menu placeholder -> {}",
-                                                        label
-                                                    );
+                                                match menu_index {
+                                                    3 => {
+                                                        app_view =
+                                                            AppView::Appearance;
+                                                        dirty = true;
+                                                        eprintln!(
+                                                            "[poc] app view -> {:?}",
+                                                            app_view
+                                                        );
+                                                    }
+                                                    5 => {
+                                                        app_view =
+                                                            AppView::Diagnostics;
+                                                        dirty = true;
+                                                        eprintln!(
+                                                            "[poc] app view -> {:?}",
+                                                            app_view
+                                                        );
+                                                    }
+                                                    _ => {
+                                                        eprintln!(
+                                                            "[poc] menu placeholder -> {}",
+                                                            label
+                                                        );
+                                                    }
                                                 }
                                             }
                                             AppView::Appearance => {
@@ -1779,6 +1811,21 @@ fn main() {
                                                             theme_name
                                                         );
                                                     }
+                                                }
+                                            }
+                                            AppView::Diagnostics => {
+                                                if menu_index == 5 {
+                                                    app_view = AppView::Menu;
+                                                    dirty = true;
+                                                    eprintln!(
+                                                        "[poc] app view -> {:?}",
+                                                        app_view
+                                                    );
+                                                } else {
+                                                    eprintln!(
+                                                        "[poc] diagnostics placeholder -> {}",
+                                                        label
+                                                    );
                                                 }
                                             }
                                             AppView::Library => {}
