@@ -391,7 +391,7 @@ const BACKLIGHT_BRIGHTNESS: &str = "/sys/class/backlight/backlight_pwm0/brightne
 const BATTERY_CAPACITY: &str = "/sys/class/power_supply/battery/capacity";
 const BRIGHTNESS_STATE_FILE: &str = "/usr/data/spotui_brightness";
 const THEME_STATE_FILE: &str = "/usr/data/spotui_theme";
-const BRIGHTNESS_LEVELS: [u32; 5] = [101, 80, 60, 40, 25];
+const BRIGHTNESS_LEVELS: [u32; 5] = [100, 80, 60, 40, 25];
 const BRIGHTNESS_LABELS: [&str; 5] = ["100%", "80%", "60%", "40%", "25%"];
 
 
