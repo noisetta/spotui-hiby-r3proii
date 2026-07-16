@@ -525,7 +525,7 @@ enum Theme {
     DurandalTerminal,
     Synthwave,
     Sunset,
-    Ice,
+    AlNoor,
     Crimson,
 }
 
@@ -540,7 +540,7 @@ impl Theme {
             Theme::DurandalTerminal => Palette::durandal_terminal(),
             Theme::Synthwave => Palette::synthwave(),
             Theme::Sunset => Palette::sunset(),
-            Theme::Ice => Palette::ice(),
+            Theme::AlNoor => Palette::al_noor(),
             Theme::Crimson => Palette::crimson(),
         }
     }
@@ -556,7 +556,7 @@ impl Theme {
             Theme::DurandalTerminal => "durandal-terminal",
             Theme::Synthwave => "synthwave",
             Theme::Sunset => "sunset",
-            Theme::Ice => "ice",
+            Theme::AlNoor => "al-noor",
             Theme::Crimson => "crimson",
         }
     }
@@ -571,7 +571,7 @@ impl Theme {
             "durandal-terminal" => Some(Theme::DurandalTerminal),
             "synthwave" => Some(Theme::Synthwave),
             "sunset" => Some(Theme::Sunset),
-            "ice" => Some(Theme::Ice),
+            "al-noor" | "ice" => Some(Theme::AlNoor),
             "crimson" => Some(Theme::Crimson),
             _ => None,
         }
@@ -603,7 +603,7 @@ const SPECIAL_LABELS: [&str; 6] = [
     "Durandal",
     "Synthwave",
     "Sunset",
-    "Ice",
+    "Al Noor",
     "Crimson",
     "Back",
 ];
@@ -742,7 +742,7 @@ impl Palette {
             progress_track: Rgb565::CSS_DARK_GRAY,
             progress_fill: Rgb565::new(8, 63, 8),
             separator: Rgb565::new(7, 13, 5),
-            toolbar: Rgb565::new(6, 12, 8),
+            toolbar: Rgb565::new(22, 5, 4),
             border: Rgb565::new(14, 28, 14),
         }
     }
@@ -783,21 +783,21 @@ impl Palette {
         }
     }
 
-    /// Pale cyan, navy, and white palette.
-    fn ice() -> Self {
+    /// Pastel cherry, yellow, lilac, and mint palette.
+    fn al_noor() -> Self {
         Self {
-            background: Rgb565::new(0, 3, 10),
-            header: Rgb565::new(20, 55, 31),
-            header_text: Rgb565::BLACK,
-            text: Rgb565::WHITE,
-            selected_row: Rgb565::new(8, 28, 31),
-            selected_text: Rgb565::BLACK,
-            now_playing: Rgb565::new(1, 8, 16),
+            background: Rgb565::new(5, 2, 8),
+            header: Rgb565::new(25, 45, 27),
+            header_text: Rgb565::new(5, 2, 8),
+            text: Rgb565::new(21, 58, 25),
+            selected_row: Rgb565::new(26, 12, 11),
+            selected_text: Rgb565::new(31, 57, 12),
+            now_playing: Rgb565::new(9, 4, 12),
             progress_track: Rgb565::CSS_DARK_GRAY,
-            progress_fill: Rgb565::new(20, 55, 31),
-            separator: Rgb565::new(2, 14, 22),
-            toolbar: Rgb565::new(4, 20, 26),
-            border: Rgb565::new(12, 35, 31),
+            progress_fill: Rgb565::new(31, 54, 10),
+            separator: Rgb565::new(14, 15, 20),
+            toolbar: Rgb565::new(18, 6, 10),
+            border: Rgb565::new(19, 40, 24),
         }
     }
 
@@ -1027,7 +1027,7 @@ fn draw_list(
                     0 => active_theme == Theme::DurandalTerminal,
                     1 => active_theme == Theme::Synthwave,
                     2 => active_theme == Theme::Sunset,
-                    3 => active_theme == Theme::Ice,
+                    3 => active_theme == Theme::AlNoor,
                     4 => active_theme == Theme::Crimson,
                     _ => false,
                 },
@@ -1786,8 +1786,8 @@ fn main() {
                                                                 "Sunset",
                                                             )),
                                                             3 => Some((
-                                                                Theme::Ice,
-                                                                "Ice",
+                                                                Theme::AlNoor,
+                                                                "Al Noor",
                                                             )),
                                                             4 => Some((
                                                                 Theme::Crimson,
