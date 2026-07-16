@@ -428,6 +428,25 @@ fn draw_list(
         .draw(fb)
         .ok();
 
+    let playback_status = match playback_state {
+        PlaybackState::Unknown => "Connecting",
+        PlaybackState::Stopped => "Stopped",
+        PlaybackState::Loading => "Loading",
+        PlaybackState::Playing => "Playing",
+        PlaybackState::Paused => "Paused",
+        PlaybackState::Error => "Error",
+    };
+    let playback_status_x =
+        (WIDTH as i32 - playback_status.chars().count() as i32 * 9) / 2;
+    Text::with_baseline(
+        playback_status,
+        Point::new(playback_status_x, 12),
+        header_style,
+        Baseline::Top,
+    )
+    .draw(fb)
+    .ok();
+
     let battery_label = match battery_percent {
         Some(value) => format!("{}%", value),
         None => "--%".to_string(),
