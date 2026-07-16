@@ -827,6 +827,7 @@ fn draw_list(
     now_playing: Option<&NowPlaying>,
     playback_position: Option<u32>,
     palette: &Palette,
+    active_theme: Theme,
     app_view: AppView,
     exit_armed: bool,
 ) {
@@ -1000,11 +1001,37 @@ fn draw_list(
             .draw(fb)
             .ok();
 
-            let label_width = label.chars().count() as i32 * 9;
+            let is_active_theme = match app_view {
+                AppView::Appearance => match index {
+                    0 => active_theme == Theme::Forest,
+                    1 => active_theme == Theme::Ocean,
+                    2 => active_theme == Theme::Violet,
+                    3 => active_theme == Theme::Amber,
+                    4 => active_theme == Theme::Monochrome,
+                    _ => false,
+                },
+                AppView::Special => match index {
+                    0 => active_theme == Theme::DurandalTerminal,
+                    1 => active_theme == Theme::Synthwave,
+                    2 => active_theme == Theme::Sunset,
+                    3 => active_theme == Theme::Ice,
+                    4 => active_theme == Theme::Crimson,
+                    _ => false,
+                },
+                AppView::Library | AppView::Menu => false,
+            };
+
+            let display_label = if is_active_theme {
+                format!("> {}", label)
+            } else {
+                label.to_string()
+            };
+            let label_width =
+                display_label.chars().count() as i32 * 9;
             let label_x = tile_x + (240 - label_width) / 2;
 
             Text::with_baseline(
-                label,
+                &display_label,
                 Point::new(label_x, tile_y + 82),
                 menu_style,
                 Baseline::Top,
@@ -1379,6 +1406,7 @@ fn main() {
         now_playing.as_ref(),
         playback_position,
         &palette,
+        theme,
         app_view,
         exit_armed,
     );
@@ -1952,6 +1980,7 @@ BRIGHTNESS_LABELS[brightness_idx]
                 now_playing.as_ref(),
                 playback_position,
                 &palette,
+                theme,
                 app_view,
                 exit_armed,
             );
