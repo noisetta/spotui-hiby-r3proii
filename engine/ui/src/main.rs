@@ -1054,6 +1054,10 @@ fn main() {
                             if code == SYN_REPORT && touch_down {
                                 // Header = page up; strip above toolbar = page down.
                                 // The bottom 60px are four equal-width controls.
+                                const NOW_PLAYING_TOP: i32 = 580;
+                                const SEEK_HIT_TOP: i32 = 620;
+                                const PROGRESS_LEFT: i32 = 10;
+                                const PROGRESS_RIGHT: i32 = 470;
                                 const DOWN_STRIP_TOP: i32 = 640;
                                 const TOOLBAR_TOP: i32 = 660;
                                 const BUTTON_WIDTH: i32 = 120;
@@ -1142,6 +1146,52 @@ fn main() {
                                 } else if cur_y >= DOWN_STRIP_TOP {
                                     // Separator area intentionally does nothing.
                                     exit_armed = false;
+                                } else if cur_y >= NOW_PLAYING_TOP {
+                                    // Only the lower part of the now-playing
+                                    // strip acts as the progress-bar seek area.
+                                    // Other taps in this strip do nothing.
+                                    exit_armed = false;
+
+                                    if cur_y >= SEEK_HIT_TOP
+                                        && cur_x >= PROGRESS_LEFT
+                                        && cur_x <= PROGRESS_RIGHT
+                                    {
+                                        if let Some(item) = now_playing.as_ref() {
+                                            if item.duration_ms > 0 {
+                                                let progress_width =
+                                                    (PROGRESS_RIGHT
+                                                        - PROGRESS_LEFT)
+                                                        as u64;
+                                                let progress_offset =
+                                                    (cur_x - PROGRESS_LEFT)
+                                                        as u64;
+                                                let target_ms = (
+                                                    progress_offset
+                                                        * item.duration_ms
+                                                            as u64
+                                                        / progress_width
+                                                ) as u32;
+
+                                                daemon_send(&format!(
+                                                    "SEEK {}",
+                                                    target_ms
+                                                ));
+
+                                                // Update immediately for visual
+                                                // feedback; daemon polling will
+                                                // soon replace this with the
+                                                // actual position.
+                                                playback_position =
+                                                    Some(target_ms);
+                                                dirty = true;
+
+                                                eprintln!(
+                                                    "[poc] progress seek -> {} ms",
+                                                    target_ms
+                                                );
+                                            }
+                                        }
+                                    }
                                 } else {
                                     let rel = cur_y - LIST_TOP;
                                     let visible_row = (rel / ROW_HEIGHT) as usize;
