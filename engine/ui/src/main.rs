@@ -390,6 +390,7 @@ fn format_playback_time(milliseconds: u32) -> String {
 const BACKLIGHT_BRIGHTNESS: &str = "/sys/class/backlight/backlight_pwm0/brightness";
 const BATTERY_CAPACITY: &str = "/sys/class/power_supply/battery/capacity";
 const BRIGHTNESS_STATE_FILE: &str = "/usr/data/spotui_brightness";
+const THEME_STATE_FILE: &str = "/usr/data/spotui_theme";
 const BRIGHTNESS_LEVELS: [u32; 5] = [101, 80, 60, 40, 25];
 const BRIGHTNESS_LABELS: [&str; 5] = ["100%", "80%", "60%", "40%", "25%"];
 
@@ -414,6 +415,35 @@ fn load_brightness_idx() -> usize {
 fn save_brightness_idx(idx: usize) {
     if let Err(e) = std::fs::write(BRIGHTNESS_STATE_FILE, idx.to_string()) {
         eprintln!("[poc] brightness state save failed: {}", e);
+    }
+}
+
+fn load_theme() -> Theme {
+    match std::fs::read_to_string(THEME_STATE_FILE) {
+        Ok(value) => match Theme::from_key(value.trim()) {
+            Some(theme) => theme,
+            None => {
+                eprintln!(
+                    "[poc] invalid saved theme {:?}; using forest",
+                    value.trim()
+                );
+                Theme::Forest
+            }
+        },
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Theme::Forest,
+        Err(e) => {
+            eprintln!(
+                "[poc] theme state load failed: {}; using forest",
+                e
+            );
+            Theme::Forest
+        }
+    }
+}
+
+fn save_theme(theme: Theme) {
+    if let Err(e) = std::fs::write(THEME_STATE_FILE, theme.key()) {
+        eprintln!("[poc] theme state save failed: {}", e);
     }
 }
 
@@ -511,6 +541,38 @@ impl Theme {
             Theme::Sunset => Palette::sunset(),
             Theme::Ice => Palette::ice(),
             Theme::Crimson => Palette::crimson(),
+        }
+    }
+
+    /// Stable identifier stored in /usr/data/spotui_theme.
+    fn key(self) -> &'static str {
+        match self {
+            Theme::Forest => "forest",
+            Theme::Ocean => "ocean",
+            Theme::Violet => "violet",
+            Theme::Amber => "amber",
+            Theme::Monochrome => "monochrome",
+            Theme::DurandalTerminal => "durandal-terminal",
+            Theme::Synthwave => "synthwave",
+            Theme::Sunset => "sunset",
+            Theme::Ice => "ice",
+            Theme::Crimson => "crimson",
+        }
+    }
+
+    fn from_key(key: &str) -> Option<Self> {
+        match key {
+            "forest" => Some(Theme::Forest),
+            "ocean" => Some(Theme::Ocean),
+            "violet" => Some(Theme::Violet),
+            "amber" => Some(Theme::Amber),
+            "monochrome" => Some(Theme::Monochrome),
+            "durandal-terminal" => Some(Theme::DurandalTerminal),
+            "synthwave" => Some(Theme::Synthwave),
+            "sunset" => Some(Theme::Sunset),
+            "ice" => Some(Theme::Ice),
+            "crimson" => Some(Theme::Crimson),
+            _ => None,
         }
     }
 }
@@ -1298,8 +1360,9 @@ fn main() {
     let mut playback_state = PlaybackState::Unknown;
     let mut now_playing: Option<NowPlaying> = None;
     let mut playback_position: Option<u32> = None;
-    let mut theme = Theme::Forest;
+    let mut theme = load_theme();
     let mut palette = theme.palette();
+    eprintln!("[poc] startup theme -> {}", theme.key());
     let mut app_view = AppView::Library;
     let mut exit_armed = false;
     let title = "Liked Songs";
@@ -1629,6 +1692,7 @@ fn main() {
                                                         theme = updated;
                                                         palette =
                                                             theme.palette();
+                                                        save_theme(theme);
                                                         dirty = true;
                                                         eprintln!(
                                                             "[poc] theme -> {}",
@@ -1680,6 +1744,7 @@ fn main() {
                                                         theme = updated;
                                                         palette =
                                                             theme.palette();
+                                                        save_theme(theme);
                                                         dirty = true;
                                                         eprintln!(
                                                             "[poc] theme -> {}",
