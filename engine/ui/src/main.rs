@@ -623,6 +623,96 @@ impl Palette {
             border: Rgb565::CSS_DARK_GRAY,
         }
     }
+
+    /// Terminal and industrial palette inspired by the classic Marathon era.
+    fn durandal_terminal() -> Self {
+        Self {
+            background: Rgb565::new(1, 3, 5),
+            header: Rgb565::new(13, 20, 8),
+            header_text: Rgb565::new(8, 63, 8),
+            text: Rgb565::new(28, 58, 27),
+            selected_row: Rgb565::new(12, 7, 17),
+            selected_text: Rgb565::new(8, 63, 8),
+            now_playing: Rgb565::new(3, 7, 10),
+            progress_track: Rgb565::CSS_DARK_GRAY,
+            progress_fill: Rgb565::new(8, 63, 8),
+            separator: Rgb565::new(7, 13, 5),
+            toolbar: Rgb565::new(6, 12, 8),
+            border: Rgb565::new(14, 28, 14),
+        }
+    }
+
+    /// Neon magenta, cyan, and deep-purple palette.
+    fn synthwave() -> Self {
+        Self {
+            background: Rgb565::new(4, 0, 10),
+            header: Rgb565::new(31, 4, 24),
+            header_text: Rgb565::new(0, 63, 31),
+            text: Rgb565::WHITE,
+            selected_row: Rgb565::new(0, 40, 31),
+            selected_text: Rgb565::BLACK,
+            now_playing: Rgb565::new(10, 0, 14),
+            progress_track: Rgb565::CSS_DARK_GRAY,
+            progress_fill: Rgb565::new(31, 0, 31),
+            separator: Rgb565::new(12, 0, 18),
+            toolbar: Rgb565::new(18, 2, 20),
+            border: Rgb565::new(0, 30, 25),
+        }
+    }
+
+    /// Coral, orange, gold, and dark-burgundy palette.
+    fn sunset() -> Self {
+        Self {
+            background: Rgb565::new(8, 2, 8),
+            header: Rgb565::new(31, 30, 8),
+            header_text: Rgb565::BLACK,
+            text: Rgb565::WHITE,
+            selected_row: Rgb565::new(31, 18, 12),
+            selected_text: Rgb565::BLACK,
+            now_playing: Rgb565::new(12, 3, 5),
+            progress_track: Rgb565::CSS_DARK_GRAY,
+            progress_fill: Rgb565::new(31, 50, 5),
+            separator: Rgb565::new(18, 6, 6),
+            toolbar: Rgb565::new(24, 10, 7),
+            border: Rgb565::CSS_DARK_GRAY,
+        }
+    }
+
+    /// Pale cyan, navy, and white palette.
+    fn ice() -> Self {
+        Self {
+            background: Rgb565::new(0, 3, 10),
+            header: Rgb565::new(20, 55, 31),
+            header_text: Rgb565::BLACK,
+            text: Rgb565::WHITE,
+            selected_row: Rgb565::new(8, 28, 31),
+            selected_text: Rgb565::BLACK,
+            now_playing: Rgb565::new(1, 8, 16),
+            progress_track: Rgb565::CSS_DARK_GRAY,
+            progress_fill: Rgb565::new(20, 55, 31),
+            separator: Rgb565::new(2, 14, 22),
+            toolbar: Rgb565::new(4, 20, 26),
+            border: Rgb565::new(12, 35, 31),
+        }
+    }
+
+    /// Black, deep-red, and bright-scarlet palette.
+    fn crimson() -> Self {
+        Self {
+            background: Rgb565::new(5, 0, 0),
+            header: Rgb565::new(31, 4, 2),
+            header_text: Rgb565::WHITE,
+            text: Rgb565::WHITE,
+            selected_row: Rgb565::new(22, 2, 3),
+            selected_text: Rgb565::WHITE,
+            now_playing: Rgb565::new(10, 0, 1),
+            progress_track: Rgb565::CSS_DARK_GRAY,
+            progress_fill: Rgb565::new(31, 10, 4),
+            separator: Rgb565::new(14, 1, 2),
+            toolbar: Rgb565::new(18, 2, 2),
+            border: Rgb565::CSS_DARK_GRAY,
+        }
+    }
 }
 
 /// Number of track rows visible above the now-playing strip.
@@ -1522,10 +1612,43 @@ fn main() {
                                                         app_view
                                                     );
                                                 } else {
-                                                    eprintln!(
-                                                        "[poc] special placeholder -> {}",
-                                                        label
-                                                    );
+                                                    let updated_theme =
+                                                        match menu_index {
+                                                            0 => Some((
+                                                                Palette::durandal_terminal(),
+                                                                "Durandal Terminal",
+                                                            )),
+                                                            1 => Some((
+                                                                Palette::synthwave(),
+                                                                "Synthwave",
+                                                            )),
+                                                            2 => Some((
+                                                                Palette::sunset(),
+                                                                "Sunset",
+                                                            )),
+                                                            3 => Some((
+                                                                Palette::ice(),
+                                                                "Ice",
+                                                            )),
+                                                            4 => Some((
+                                                                Palette::crimson(),
+                                                                "Crimson",
+                                                            )),
+                                                            _ => None,
+                                                        };
+
+                                                    if let Some((
+                                                        updated,
+                                                        theme_name,
+                                                    )) = updated_theme
+                                                    {
+                                                        palette = updated;
+                                                        dirty = true;
+                                                        eprintln!(
+                                                            "[poc] theme -> {}",
+                                                            theme_name
+                                                        );
+                                                    }
                                                 }
                                             }
                                             AppView::Library => {}
