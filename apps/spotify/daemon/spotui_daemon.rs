@@ -15,6 +15,7 @@
 //   STOP                     -> stop
 //   STATUS                   -> report current playback state
 //   NOW_PLAYING              -> report current track metadata
+//   POSITION                 -> report playback position in milliseconds
 //   QUIT                     -> shut the daemon down
 //
 // Audio goes out through whichever backend `audio_backend::find` selects,
@@ -22,7 +23,7 @@
 // SinkBuilder). For the HiBy we use the pipe backend piped to aplay, exactly
 // as already proven working.
 
-use std::{process::exit, sync::Arc};
+use std::{process::exit, sync::Arc, time::Duration};
 
 use tokio::{
     io::{AsyncBufReadExt, AsyncWriteExt, BufReader},
@@ -74,7 +75,8 @@ async fn main() {
 
     // --- Configuration -----------------------------------------------------
     let session_config = SessionConfig::default();
-    let player_config = PlayerConfig::default();
+    let mut player_config = PlayerConfig::default();
+    player_config.position_update_interval = Some(Duration::from_secs(1));
     let audio_format = AudioFormat::default();
 
     // --- Authentication (from cache, like our working setup) ---------------
@@ -138,8 +140,10 @@ async fn main() {
     // Track actual player state and current metadata from librespot events.
     let playback_state = Arc::new(RwLock::new("STOPPED"));
     let now_playing = Arc::new(RwLock::new(None::<NowPlaying>));
+    let playback_position = Arc::new(RwLock::new(None::<u32>));
     let event_state = playback_state.clone();
     let event_now_playing = now_playing.clone();
+    let event_position = playback_position.clone();
     let mut player_events = player.get_player_event_channel();
 
     tokio::spawn(async move {
@@ -156,6 +160,25 @@ async fn main() {
             if let Some(new_state) = new_state {
                 *event_state.write().await = new_state;
                 eprintln!("[spotui] playback state -> {new_state}");
+            }
+
+            let position_update = match &event {
+                PlayerEvent::Loading { position_ms, .. }
+                | PlayerEvent::Playing { position_ms, .. }
+                | PlayerEvent::Paused { position_ms, .. }
+                | PlayerEvent::PositionCorrection { position_ms, .. }
+                | PlayerEvent::PositionChanged { position_ms, .. }
+                | PlayerEvent::Seeked { position_ms, .. } => {
+                    Some(Some(*position_ms))
+                }
+                PlayerEvent::Stopped { .. }
+                | PlayerEvent::EndOfTrack { .. }
+                | PlayerEvent::Unavailable { .. } => Some(None),
+                _ => None,
+            };
+
+            if let Some(updated_position) = position_update {
+                *event_position.write().await = updated_position;
             }
 
             match event {
@@ -241,6 +264,7 @@ async fn main() {
     let unix_mixer = mixer.clone();
     let unix_playback_state = playback_state.clone();
     let unix_now_playing = now_playing.clone();
+    let unix_playback_position = playback_position.clone();
     let unix_task = tokio::spawn(async move {
         loop {
             match unix_listener.accept().await {
@@ -250,6 +274,7 @@ async fn main() {
                     let mixer = unix_mixer.clone();
                     let playback_state = unix_playback_state.clone();
                     let now_playing = unix_now_playing.clone();
+                    let playback_position = unix_playback_position.clone();
                     tokio::spawn(async move {
                         let (r, w) = stream.into_split();
                         handle_conn(
@@ -260,6 +285,7 @@ async fn main() {
                             mixer,
                             playback_state,
                             now_playing,
+                            playback_position,
                         )
                         .await;
                     });
@@ -274,6 +300,7 @@ async fn main() {
     let tcp_mixer = mixer.clone();
     let tcp_playback_state = playback_state.clone();
     let tcp_now_playing = now_playing.clone();
+    let tcp_playback_position = playback_position.clone();
     let tcp_task = tokio::spawn(async move {
         loop {
             match tcp_listener.accept().await {
@@ -283,6 +310,7 @@ async fn main() {
                     let mixer = tcp_mixer.clone();
                     let playback_state = tcp_playback_state.clone();
                     let now_playing = tcp_now_playing.clone();
+                    let playback_position = tcp_playback_position.clone();
                     tokio::spawn(async move {
                         let (r, w) = stream.into_split();
                         handle_conn(
@@ -293,6 +321,7 @@ async fn main() {
                             mixer,
                             playback_state,
                             now_playing,
+                            playback_position,
                         )
                         .await;
                     });
@@ -317,6 +346,7 @@ async fn handle_conn<R, W>(
     mixer: Arc<dyn Mixer>,
     playback_state: Arc<RwLock<&'static str>>,
     now_playing: Arc<RwLock<Option<NowPlaying>>>,
+    playback_position: Arc<RwLock<Option<u32>>>,
 ) where
     R: tokio::io::AsyncRead + Unpin,
     W: tokio::io::AsyncWrite + Unpin,
@@ -365,6 +395,13 @@ async fn handle_conn<R, W>(
                         item.id, item.title, item.artist, item.duration_ms
                     ),
                     None => "NOW_PLAYING NONE\n".to_string(),
+                }
+            }
+            "POSITION" => {
+                let position = *playback_position.read().await;
+                match position {
+                    Some(position) => format!("POSITION {position}\n"),
+                    None => "POSITION NONE\n".to_string(),
                 }
             }
             "SEARCH" => search_tracks(&session, arg).await,
