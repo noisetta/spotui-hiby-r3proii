@@ -380,6 +380,13 @@ fn truncate_label(s: &str, max_chars: usize) -> String {
     out
 }
 
+fn format_playback_time(milliseconds: u32) -> String {
+    let total_seconds = milliseconds / 1000;
+    let minutes = total_seconds / 60;
+    let seconds = total_seconds % 60;
+    format!("{minutes}:{seconds:02}")
+}
+
 const BACKLIGHT_BRIGHTNESS: &str = "/sys/class/backlight/backlight_pwm0/brightness";
 const BATTERY_CAPACITY: &str = "/sys/class/power_supply/battery/capacity";
 const BRIGHTNESS_STATE_FILE: &str = "/usr/data/spotui_brightness";
@@ -483,6 +490,7 @@ fn draw_list(
     brightness_idx: usize,
     playback_state: PlaybackState,
     now_playing: Option<&NowPlaying>,
+    playback_position: Option<u32>,
     exit_armed: bool,
 ) {
     // Clear to dark blue.
@@ -604,19 +612,34 @@ fn draw_list(
 
     match now_playing {
         Some(item) => {
+            let duration_ms = item.duration_ms;
+            let position_ms = playback_position.unwrap_or(0).min(duration_ms);
+            let time_label = format!(
+                "{} / {}",
+                format_playback_time(position_ms),
+                format_playback_time(duration_ms)
+            );
+            let time_width = time_label.chars().count() as i32 * 9;
+
+            let artist_available_width =
+                (WIDTH as i32 - 20 - time_width - 12).max(0);
+            let artist_max_chars = (artist_available_width / 9) as usize;
+
             let now_title = truncate_label(&item.title, 50);
-            let now_artist = if item.artist.is_empty() {
-                "Unknown artist".to_string()
+            let artist_source = if item.artist.is_empty() {
+                "Unknown artist"
             } else {
-                truncate_label(&item.artist, 52)
+                item.artist.as_str()
             };
+            let now_artist =
+                truncate_label(artist_source, artist_max_chars);
 
             let now_title_style =
                 MonoTextStyle::new(&FONT_9X15_BOLD, Rgb565::WHITE);
 
             Text::with_baseline(
                 &now_title,
-                Point::new(10, now_playing_y + 8),
+                Point::new(10, now_playing_y + 3),
                 now_title_style,
                 Baseline::Top,
             )
@@ -625,12 +648,57 @@ fn draw_list(
 
             Text::with_baseline(
                 &now_artist,
-                Point::new(10, now_playing_y + 32),
+                Point::new(10, now_playing_y + 21),
                 text_style,
                 Baseline::Top,
             )
             .draw(fb)
             .ok();
+
+            Text::with_baseline(
+                &time_label,
+                Point::new(
+                    WIDTH as i32 - 10 - time_width,
+                    now_playing_y + 21,
+                ),
+                text_style,
+                Baseline::Top,
+            )
+            .draw(fb)
+            .ok();
+
+            let progress_x = 10;
+            let progress_y = now_playing_y + 53;
+            let progress_width = WIDTH as u32 - 20;
+
+            Rectangle::new(
+                Point::new(progress_x, progress_y),
+                Size::new(progress_width, 4),
+            )
+            .into_styled(PrimitiveStyle::with_fill(
+                Rgb565::CSS_DARK_GRAY,
+            ))
+            .draw(fb)
+            .ok();
+
+            if duration_ms > 0 {
+                let filled_width = (
+                    position_ms as u64 * progress_width as u64
+                        / duration_ms as u64
+                ) as u32;
+
+                if filled_width > 0 {
+                    Rectangle::new(
+                        Point::new(progress_x, progress_y),
+                        Size::new(filled_width, 4),
+                    )
+                    .into_styled(PrimitiveStyle::with_fill(
+                        Rgb565::new(0, 63, 0),
+                    ))
+                    .draw(fb)
+                    .ok();
+                }
+            }
         }
         None => {
             Text::with_baseline(
@@ -882,6 +950,7 @@ fn main() {
         brightness_idx,
         playback_state,
         now_playing.as_ref(),
+        playback_position,
         exit_armed,
     );
     eprintln!("[poc] drew initial list");
@@ -1201,6 +1270,7 @@ BRIGHTNESS_LABELS[brightness_idx]
                     };
 
                     playback_position = updated_position;
+                    dirty = true;
 
                     if should_log {
                         match playback_position {
@@ -1252,9 +1322,9 @@ BRIGHTNESS_LABELS[brightness_idx]
             }
         }
 
-        // Re-render the list only when something changed (a tap). This is the
-        // expensive part (embedded-graphics + 691KB flush), so we avoid it when
-        // idle.
+        // Re-render only when visible UI state changes. During playback,
+        // position updates intentionally redraw the progress display about once
+        // per second. The keepalive path remains cheaper while idle or paused.
         if dirty {
             draw_list(
                 &mut fb,
@@ -1266,6 +1336,7 @@ BRIGHTNESS_LABELS[brightness_idx]
                 brightness_idx,
                 playback_state,
                 now_playing.as_ref(),
+                playback_position,
                 exit_armed,
             );
             last_flush = std::time::Instant::now();
