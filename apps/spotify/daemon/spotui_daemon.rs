@@ -16,6 +16,7 @@
 //   STATUS                   -> report current playback state
 //   NOW_PLAYING              -> report current track metadata
 //   POSITION                 -> report playback position in milliseconds
+//   SEEK <milliseconds>      -> seek within the loaded track
 //   QUIT                     -> shut the daemon down
 //
 // Audio goes out through whichever backend `audio_backend::find` selects,
@@ -404,6 +405,25 @@ async fn handle_conn<R, W>(
                     None => "POSITION NONE\n".to_string(),
                 }
             }
+            "SEEK" => match arg.parse::<u32>() {
+                Ok(requested_ms) => {
+                    let duration_ms = now_playing
+                        .read()
+                        .await
+                        .as_ref()
+                        .map(|item| item.duration_ms);
+
+                    match duration_ms {
+                        Some(duration_ms) => {
+                            let target_ms = requested_ms.min(duration_ms);
+                            player.seek(target_ms);
+                            format!("OK seek {target_ms}\n")
+                        }
+                        None => "ERR no track loaded\n".to_string(),
+                    }
+                }
+                Err(_) => "ERR SEEK needs milliseconds\n".to_string(),
+            },
             "SEARCH" => search_tracks(&session, arg).await,
             "LIKED" => liked_tracks(&session).await,
             "PLAYLIST" => playlist_tracks(&session, arg).await,
