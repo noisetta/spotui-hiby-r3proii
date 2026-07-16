@@ -474,6 +474,23 @@ fn daemon_query(cmd: &str) -> Vec<TrackItem> {
     items
 }
 
+/// Main content displayed above the now-playing strip.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum AppView {
+    Library,
+    Menu,
+}
+
+/// Top-level menu tiles.
+const MENU_LABELS: [&str; 6] = [
+    "Playback",
+    "Sound",
+    "Library",
+    "Appearance",
+    "Device",
+    "Diagnostics",
+];
+
 /// Colours used by the main SpotUI interface.
 ///
 /// Keeping these values together allows complete theme presets to be added
@@ -532,6 +549,7 @@ fn draw_list(
     now_playing: Option<&NowPlaying>,
     playback_position: Option<u32>,
     palette: &Palette,
+    app_view: AppView,
     exit_armed: bool,
 ) {
     // Clear to dark blue.
@@ -546,9 +564,19 @@ fn draw_list(
         .draw(fb)
         .ok();
     let header_style = MonoTextStyle::new(&FONT_9X15_BOLD, palette.header_text);
-    Text::with_baseline(title, Point::new(6, 12), header_style, Baseline::Top)
-        .draw(fb)
-        .ok();
+    let header_title = match app_view {
+        AppView::Library => title,
+        AppView::Menu => "More",
+    };
+
+    Text::with_baseline(
+        header_title,
+        Point::new(6, 12),
+        header_style,
+        Baseline::Top,
+    )
+    .draw(fb)
+    .ok();
 
     let playback_status = match playback_state {
         PlaybackState::Unknown => "Connecting",
@@ -619,7 +647,7 @@ fn draw_list(
 
     // Header scroll indicators.
     // Tapping most of the header pages up; the far-right section pages down.
-    if scroll > 0 {
+    if app_view == AppView::Library && scroll > 0 {
         Text::with_baseline(
             "^",
             Point::new(WIDTH as i32 - 112, 12),
@@ -630,7 +658,7 @@ fn draw_list(
         .ok();
     }
 
-    if end < items.len() {
+    if app_view == AppView::Library && end < items.len() {
         Text::with_baseline(
             "v",
             Point::new(WIDTH as i32 - 88, 12),
@@ -639,6 +667,64 @@ fn draw_list(
         )
         .draw(fb)
         .ok();
+    }
+
+    // The top-level menu replaces the visible library area while
+    // preserving the header, now-playing strip, and toolbar.
+    if app_view == AppView::Menu {
+        Rectangle::new(
+            Point::new(0, 40),
+            Size::new(WIDTH as u32, 540),
+        )
+        .into_styled(PrimitiveStyle::with_fill(palette.background))
+        .draw(fb)
+        .ok();
+
+        let menu_style =
+            MonoTextStyle::new(&FONT_9X15_BOLD, palette.text);
+
+        for (index, &label) in MENU_LABELS.iter().enumerate() {
+            let tile_x = (index % 2) as i32 * 240;
+            let tile_y = 40 + (index / 2) as i32 * 180;
+
+            Rectangle::new(
+                Point::new(tile_x, tile_y),
+                Size::new(240, 180),
+            )
+            .into_styled(PrimitiveStyle::with_fill(
+                palette.now_playing,
+            ))
+            .draw(fb)
+            .ok();
+
+            Rectangle::new(
+                Point::new(tile_x + 239, tile_y),
+                Size::new(1, 180),
+            )
+            .into_styled(PrimitiveStyle::with_fill(palette.border))
+            .draw(fb)
+            .ok();
+
+            Rectangle::new(
+                Point::new(tile_x, tile_y + 179),
+                Size::new(240, 1),
+            )
+            .into_styled(PrimitiveStyle::with_fill(palette.border))
+            .draw(fb)
+            .ok();
+
+            let label_width = label.chars().count() as i32 * 9;
+            let label_x = tile_x + (240 - label_width) / 2;
+
+            Text::with_baseline(
+                label,
+                Point::new(label_x, tile_y + 82),
+                menu_style,
+                Baseline::Top,
+            )
+            .draw(fb)
+            .ok();
+        }
     }
 
     // Dedicated current-track strip between the list and toolbar.
@@ -783,8 +869,14 @@ fn draw_list(
     let exit_label = if exit_armed { "Confirm" } else { "Exit" };
     let brightness_label =
         format!("Bright {}", BRIGHTNESS_LABELS[brightness_idx]);
-    let playback_label = if playback_state.is_paused() { "Resume" } else { "Pause" };
-    let button_style = MonoTextStyle::new(&FONT_9X15_BOLD, palette.text);
+    let playback_label =
+        if playback_state.is_paused() { "Resume" } else { "Pause" };
+    let menu_label = match app_view {
+        AppView::Library => "More",
+        AppView::Menu => "Back",
+    };
+    let button_style =
+        MonoTextStyle::new(&FONT_9X15_BOLD, palette.text);
 
     Text::with_baseline(
         exit_label,
@@ -813,9 +905,12 @@ fn draw_list(
     .draw(fb)
     .ok();
 
+    let menu_label_width = menu_label.chars().count() as i32 * 9;
+    let menu_label_x = 360 + (120 - menu_label_width) / 2;
+
     Text::with_baseline(
-        "Refresh",
-        Point::new(385, toolbar_y + 22),
+        menu_label,
+        Point::new(menu_label_x, toolbar_y + 22),
         button_style,
         Baseline::Top,
     )
@@ -979,6 +1074,7 @@ fn main() {
     let mut now_playing: Option<NowPlaying> = None;
     let mut playback_position: Option<u32> = None;
     let palette = Palette::forest();
+    let mut app_view = AppView::Library;
     let mut exit_armed = false;
     let title = "Liked Songs";
     let mut battery_percent = read_battery_percent();
@@ -994,6 +1090,7 @@ fn main() {
         now_playing.as_ref(),
         playback_position,
         &palette,
+        app_view,
         exit_armed,
     );
     eprintln!("[poc] drew initial list");
@@ -1106,25 +1203,30 @@ fn main() {
                                 const BUTTON_WIDTH: i32 = 120;
 
                                 if cur_y < LIST_TOP {
-                                    let page =
-                                        VISIBLE_ROWS.saturating_sub(1).max(1);
-                                    let max_scroll =
-                                        items.len().saturating_sub(VISIBLE_ROWS);
-
-                                    if cur_x < WIDTH as i32 - 120 {
-                                        scroll = scroll.saturating_sub(page);
-                                        eprintln!(
-                                            "[poc] header scroll up -> {scroll}"
-                                        );
-                                    } else {
-                                        scroll = (scroll + page).min(max_scroll);
-                                        eprintln!(
-                                            "[poc] header scroll down -> {scroll}"
-                                        );
-                                    }
-
                                     exit_armed = false;
-                                    dirty = true;
+
+                                    if app_view == AppView::Library {
+                                        let page =
+                                            VISIBLE_ROWS.saturating_sub(1).max(1);
+                                        let max_scroll =
+                                            items.len().saturating_sub(VISIBLE_ROWS);
+
+                                        if cur_x < WIDTH as i32 - 120 {
+                                            scroll =
+                                                scroll.saturating_sub(page);
+                                            eprintln!(
+                                                "[poc] header scroll up -> {scroll}"
+                                            );
+                                        } else {
+                                            scroll =
+                                                (scroll + page).min(max_scroll);
+                                            eprintln!(
+                                                "[poc] header scroll down -> {scroll}"
+                                            );
+                                        }
+
+                                        dirty = true;
+                                    }
                                 } else if cur_y >= TOOLBAR_TOP {
                                     let safe_x = cur_x.max(0).min(WIDTH as i32 - 1);
                                     let button = safe_x / BUTTON_WIDTH;
@@ -1166,23 +1268,15 @@ fn main() {
                                         }
                                         3 => {
                                             exit_armed = false;
-                                            eprintln!("[poc] toolbar refresh");
-                                            let fetched = daemon_query("LIKED");
-                                            if fetched.is_empty() {
-                                                eprintln!(
-                                                    "[poc] refresh returned no tracks; keeping current list"
-                                                );
-                                            } else {
-                                                items = fetched;
-                                                tracks_loaded = true;
-                                                scroll = 0;
-                                                selected = None;
-                                                dirty = true;
-                                                eprintln!(
-                                                    "[poc] refresh loaded {} tracks",
-                                                    items.len()
-                                                );
-                                            }
+                                            app_view = match app_view {
+                                                AppView::Library => AppView::Menu,
+                                                AppView::Menu => AppView::Library,
+                                            };
+                                            dirty = true;
+                                            eprintln!(
+                                                "[poc] app view -> {:?}",
+                                                app_view
+                                            );
                                         }
                                         _ => {}
                                     }
@@ -1234,6 +1328,24 @@ fn main() {
                                                 );
                                             }
                                         }
+                                    }
+                                } else if app_view == AppView::Menu {
+                                    exit_armed = false;
+
+                                    let safe_x =
+                                        cur_x.max(0).min(WIDTH as i32 - 1);
+                                    let column = (safe_x / 240) as usize;
+                                    let row =
+                                        ((cur_y - LIST_TOP) / 180) as usize;
+                                    let menu_index = row * 2 + column;
+
+                                    if let Some(label) =
+                                        MENU_LABELS.get(menu_index)
+                                    {
+                                        eprintln!(
+                                            "[poc] menu placeholder -> {}",
+                                            label
+                                        );
                                     }
                                 } else {
                                     let rel = cur_y - LIST_TOP;
@@ -1431,6 +1543,7 @@ BRIGHTNESS_LABELS[brightness_idx]
                 now_playing.as_ref(),
                 playback_position,
                 &palette,
+                app_view,
                 exit_armed,
             );
             last_flush = std::time::Instant::now();
