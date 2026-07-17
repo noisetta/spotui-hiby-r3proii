@@ -1,10 +1,10 @@
 # Roadmap
 
-SpotUI is currently an early source-only release for the HiBy R3 Pro II. This roadmap is intentionally conservative: stability, documentation, and recovery come before convenience features.
+SpotUI is currently an early developer preview source release for the HiBy R3 Pro II. This roadmap is intentionally conservative: stability, documentation, and recovery come before convenience features.
 
 ## Current status
 
-- Source-only public release.
+- Early developer preview with a source-only public repository.
 - Tested primarily on the HiBy R3 Pro II.
 - No ready-to-flash firmware builds are provided in this repository.
 - Manual build, patching, and device setup are still required.
@@ -20,6 +20,7 @@ SpotUI is currently an early source-only release for the HiBy R3 Pro II. This ro
 - Added persistent brightness settings across SpotUI launches.
 - Documented the tested UI and daemon cross-build and deployment workflow.
 - Expanded recovery, rollback, and common failure troubleshooting procedures.
+- Added a developer preview installation guide with prerequisites, validation, limitations, and rollback guidance.
 
 ## Currently working in the development build
 
@@ -33,7 +34,7 @@ SpotUI is currently an early source-only release for the HiBy R3 Pro II. This ro
 
 ## Medium-term goals
 
-- Improve public install documentation.
+- Add automated installation preflight and compatibility checks.
 - Add clearer logs and diagnostics.
 - Document device-specific assumptions, such as framebuffer size, input devices, audio routing, and backlight behavior.
 
