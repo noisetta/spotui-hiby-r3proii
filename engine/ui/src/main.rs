@@ -51,6 +51,7 @@ const BTN_TOUCH: u16 = 0x014a;
 const ABS_MT_POSITION_X: u16 = 0x35;
 const ABS_MT_POSITION_Y: u16 = 0x36;
 const SYN_REPORT: u16 = 0x00;
+const VOLUME_POPUP_MS: u128 = 1800;
 
 // ---- Backlight ----------------------------------------------------------
 const BL_BRIGHTNESS: &str = "/sys/class/backlight/backlight_pwm0/brightness";
@@ -931,6 +932,53 @@ impl Palette {
 /// Nine 60-pixel rows leave 60 pixels for current-track metadata.
 const VISIBLE_ROWS: usize = 9;
 
+/// Draw a temporary volume indicator over the now-playing strip.
+fn draw_volume_popup(
+    fb: &mut Framebuffer,
+    volume_percent: u8,
+    palette: &Palette,
+) {
+    const POPUP_WIDTH: u32 = 240;
+    const POPUP_HEIGHT: u32 = 44;
+
+    let popup_x =
+        (WIDTH as i32 - POPUP_WIDTH as i32) / 2;
+    let popup_y = HEIGHT as i32 - 136;
+
+    Rectangle::new(
+        Point::new(popup_x - 2, popup_y - 2),
+        Size::new(POPUP_WIDTH + 4, POPUP_HEIGHT + 4),
+    )
+    .into_styled(PrimitiveStyle::with_fill(palette.border))
+    .draw(fb)
+    .ok();
+
+    Rectangle::new(
+        Point::new(popup_x, popup_y),
+        Size::new(POPUP_WIDTH, POPUP_HEIGHT),
+    )
+    .into_styled(PrimitiveStyle::with_fill(palette.toolbar))
+    .draw(fb)
+    .ok();
+
+    let label = format!("Volume {}%", volume_percent);
+    let label_width = label.chars().count() as i32 * 9;
+    let label_x = (WIDTH as i32 - label_width) / 2;
+    let popup_style =
+        MonoTextStyle::new(&FONT_9X15_BOLD, palette.text);
+
+    Text::with_baseline(
+        &label,
+        Point::new(label_x, popup_y + 14),
+        popup_style,
+        Baseline::Top,
+    )
+    .draw(fb)
+    .ok();
+
+    fb.flush().ok();
+}
+
 /// Draw the track list with scrolling. `scroll` is the index of the first
 /// visible item; `selected` highlights one row (absolute index).
 fn draw_list(
@@ -1646,6 +1694,8 @@ fn main() {
     let mut last_memory_check = std::time::Instant::now();
     let startup_time = std::time::Instant::now();
     let mut startup_brightness_applied = false;
+    let mut volume_popup:
+        Option<(u8, std::time::Instant)> = None;
 
     loop {
         // Drain any available input events (non-blocking).
@@ -2028,6 +2078,11 @@ fn main() {
                                     .and_then(parse_volume_reply)
                                 {
                                     Some(percent) => {
+                                        volume_popup = Some((
+                                            percent,
+                                            std::time::Instant::now(),
+                                        ));
+                                        dirty = true;
                                         eprintln!(
                                             "[poc] volume up -> {}%",
                                             percent
@@ -2047,6 +2102,11 @@ fn main() {
                                     .and_then(parse_volume_reply)
                                 {
                                     Some(percent) => {
+                                        volume_popup = Some((
+                                            percent,
+                                            std::time::Instant::now(),
+                                        ));
+                                        dirty = true;
                                         eprintln!(
                                             "[poc] volume down -> {}%",
                                             percent
@@ -2196,6 +2256,19 @@ BRIGHTNESS_LABELS[brightness_idx]
             }
         }
 
+        let volume_popup_expired = volume_popup
+            .as_ref()
+            .map(|(_, shown_at)| {
+                shown_at.elapsed().as_millis()
+                    >= VOLUME_POPUP_MS
+            })
+            .unwrap_or(false);
+
+        if volume_popup_expired {
+            volume_popup = None;
+            dirty = true;
+        }
+
         // Re-check the output jack roughly once a second so plugging into a
         // different jack (3.5mm <-> 4.4mm) re-routes automatically. Only calls
         // amixer when the detected port actually changes, to avoid churn.
@@ -2239,6 +2312,15 @@ BRIGHTNESS_LABELS[brightness_idx]
                 app_view,
                 exit_armed,
             );
+
+            if let Some((percent, _)) = volume_popup.as_ref() {
+                draw_volume_popup(
+                    &mut fb,
+                    *percent,
+                    &palette,
+                );
+            }
+
             last_flush = std::time::Instant::now();
             dirty = false;
         } else if last_flush.elapsed().as_millis() as u64 >= keepalive_ms {
