@@ -1036,11 +1036,23 @@ fn draw_list(
                 | AppView::Diagnostics => false,
             };
 
-            let display_label = if is_active_theme {
-                format!("> {}", label)
-            } else {
-                label.to_string()
-            };
+            let display_label =
+                if app_view == AppView::Diagnostics && index == 0 {
+                    let daemon_status = match playback_state {
+                        PlaybackState::Unknown => "Connecting",
+                        PlaybackState::Stopped => "Stopped",
+                        PlaybackState::Loading => "Loading",
+                        PlaybackState::Playing => "Playing",
+                        PlaybackState::Paused => "Paused",
+                        PlaybackState::Error => "Error",
+                    };
+
+                    format!("Daemon: {}", daemon_status)
+                } else if is_active_theme {
+                    format!("> {}", label)
+                } else {
+                    label.to_string()
+                };
             let label_width =
                 display_label.chars().count() as i32 * 9;
             let label_x = tile_x + (240 - label_width) / 2;
