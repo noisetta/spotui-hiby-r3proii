@@ -433,6 +433,56 @@ fn read_storage_free_mb() -> Option<u64> {
     )
 }
 
+/// Return available system memory in whole mebibytes.
+///
+/// Prefer MemAvailable when provided by the kernel. Older kernels fall back
+/// to MemFree plus reclaimable buffers and cache.
+fn read_memory_available_mb() -> Option<u64> {
+    let meminfo = std::fs::read_to_string("/proc/meminfo").ok()?;
+
+    let mut mem_available_kb: Option<u64> = None;
+    let mut mem_free_kb: u64 = 0;
+    let mut buffers_kb: u64 = 0;
+    let mut cached_kb: u64 = 0;
+
+    for line in meminfo.lines() {
+        let mut fields = line.split_whitespace();
+
+        let key = match fields.next() {
+            Some(value) => value,
+            None => continue,
+        };
+
+        let value_kb = match fields
+            .next()
+            .and_then(|value| value.parse::<u64>().ok())
+        {
+            Some(value) => value,
+            None => continue,
+        };
+
+        match key {
+            "MemAvailable:" => mem_available_kb = Some(value_kb),
+            "MemFree:" => mem_free_kb = value_kb,
+            "Buffers:" => buffers_kb = value_kb,
+            "Cached:" => cached_kb = value_kb,
+            _ => {}
+        }
+    }
+
+    let available_kb = mem_available_kb.unwrap_or_else(|| {
+        mem_free_kb
+            .saturating_add(buffers_kb)
+            .saturating_add(cached_kb)
+    });
+
+    if available_kb == 0 {
+        None
+    } else {
+        Some(available_kb / 1024)
+    }
+}
+
 fn load_brightness_idx() -> usize {
     match std::fs::read_to_string(BRIGHTNESS_STATE_FILE) {
         Ok(s) => match s.trim().parse::<usize>() {
@@ -865,6 +915,7 @@ fn draw_list(
     title: &str,
     battery_percent: Option<u8>,
     storage_free_mb: Option<u64>,
+    memory_available_mb: Option<u64>,
     brightness_idx: usize,
     playback_state: PlaybackState,
     now_playing: Option<&NowPlaying>,
@@ -1088,6 +1139,12 @@ fn draw_list(
                                 format!("Storage: {} MB", free_mb)
                             }
                             None => "Storage: Unknown".to_string(),
+                        },
+                        2 => match memory_available_mb {
+                            Some(available_mb) => {
+                                format!("Memory: {} MB", available_mb)
+                            }
+                            None => "Memory: Unknown".to_string(),
                         },
                         _ => label.to_string(),
                     }
@@ -1468,6 +1525,7 @@ fn main() {
     let title = "Liked Songs";
     let mut battery_percent = read_battery_percent();
     let mut storage_free_mb = read_storage_free_mb();
+    let mut memory_available_mb = read_memory_available_mb();
     draw_list(
         &mut fb,
         &items,
@@ -1476,6 +1534,7 @@ fn main() {
         title,
         battery_percent,
         storage_free_mb,
+        memory_available_mb,
         brightness_idx,
         playback_state,
         now_playing.as_ref(),
@@ -1558,6 +1617,7 @@ fn main() {
     let mut last_status_check = std::time::Instant::now();
     let mut last_battery_check = std::time::Instant::now();
     let mut last_storage_check = std::time::Instant::now();
+    let mut last_memory_check = std::time::Instant::now();
     let startup_time = std::time::Instant::now();
     let mut startup_brightness_applied = false;
 
@@ -2063,6 +2123,21 @@ BRIGHTNESS_LABELS[brightness_idx]
             }
         }
 
+        // Refresh available memory every 30 seconds.
+        if last_memory_check.elapsed().as_secs() >= 30 {
+            last_memory_check = std::time::Instant::now();
+            let updated = read_memory_available_mb();
+
+            if updated != memory_available_mb {
+                memory_available_mb = updated;
+                dirty = true;
+                eprintln!(
+                    "[poc] memory available -> {:?} MB",
+                    memory_available_mb
+                );
+            }
+        }
+
         // Re-check the output jack roughly once a second so plugging into a
         // different jack (3.5mm <-> 4.4mm) re-routes automatically. Only calls
         // amixer when the detected port actually changes, to avoid churn.
@@ -2096,6 +2171,7 @@ BRIGHTNESS_LABELS[brightness_idx]
                 title,
                 battery_percent,
                 storage_free_mb,
+                memory_available_mb,
                 brightness_idx,
                 playback_state,
                 now_playing.as_ref(),
