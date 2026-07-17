@@ -2,7 +2,7 @@
 
 SpotUI for the HiBy R3 Pro II: an experimental standalone, tetherless streaming UI/client with on-device control.
 
-> Early public source release. This is not yet a one-click install or end-user firmware package.
+> Early developer preview source release. This is not yet a one-click install or end-user firmware package.
 
 [![Support me on Ko-fi](https://ko-fi.com/img/githubbutton_sm.svg)](https://ko-fi.com/noisetta)
 
@@ -91,6 +91,7 @@ This is an independent community research/modding project. It is provided withou
 
 ## Project documents
 
+- [Developer preview installation](docs/developer-install.md)
 - [Build and deploy SpotUI](docs/build.md)
 - [Verified firmware build workflow](docs/firmware-build.md)
 - [Roadmap](docs/roadmap.md)
