@@ -18,6 +18,8 @@ SpotUI is currently an early source-only release for the HiBy R3 Pro II. This ro
 - Changed the visible Qobuz launcher caption to SpotUI while preserving internal widget and localization keys.
 - Verified early-launch readiness, SpotUI startup, and audio playback on-device.
 - Added persistent brightness settings across SpotUI launches.
+- Documented the tested UI and daemon cross-build and deployment workflow.
+- Expanded recovery, rollback, and common failure troubleshooting procedures.
 
 ## Currently working in the development build
 
@@ -28,13 +30,6 @@ SpotUI is currently an early source-only release for the HiBy R3 Pro II. This ro
 - Brightness row cycles through safe brightness levels.
 - Long track names are truncated for readability.
 - The launcher performs WiFi bring-up, output jack routing, daemon supervision, and stale temp-file cleanup.
-
-## Short-term goals
-
-- Add UI build instructions for the MIPS target.
-- Add daemon build instructions.
-- Add recovery and restore instructions.
-- Document common failure modes and troubleshooting steps.
 
 ## Medium-term goals
 
