@@ -224,14 +224,40 @@ fn auto_select_output() -> Option<u8> {
     }
 }
 
-/// Send a command line to the daemon's unix socket (fire and forget).
+/// Send a command and return the daemon reply.
+fn daemon_request(cmd: &str) -> Option<String> {
+    let mut s = UnixStream::connect(DAEMON_SOCK).ok()?;
+    s.write_all(cmd.as_bytes()).ok()?;
+    s.write_all(&[10]).ok()?;
+
+    let mut buf = [0u8; 128];
+    let read = s.read(&mut buf).ok()?;
+
+    if read == 0 {
+        return None;
+    }
+
+    Some(
+        String::from_utf8_lossy(&buf[..read])
+            .trim()
+            .to_string(),
+    )
+}
+
+/// Send a command while ignoring its reply.
 fn daemon_send(cmd: &str) {
-    if let Ok(mut s) = UnixStream::connect(DAEMON_SOCK) {
-        let _ = s.write_all(cmd.as_bytes());
-        let _ = s.write_all(b"\n");
-        // read a short reply so the daemon processes it, then drop
-        let mut buf = [0u8; 128];
-        let _ = s.read(&mut buf);
+    let _ = daemon_request(cmd);
+}
+
+/// Extract a percentage from replies such as `OK vol 85`.
+fn parse_volume_reply(reply: &str) -> Option<u8> {
+    let value = reply.strip_prefix("OK vol ")?;
+    let percent = value.trim().parse::<u8>().ok()?;
+
+    if percent <= 100 {
+        Some(percent)
+    } else {
+        None
     }
 }
 
