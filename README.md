@@ -91,6 +91,7 @@ This is an independent community research/modding project. It is provided withou
 
 ## Project documents
 
+- [Verified firmware build workflow](docs/firmware-build.md)
 - [Roadmap](docs/roadmap.md)
 - [Recovery notes](docs/recovery.md)
 
