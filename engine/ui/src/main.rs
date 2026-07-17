@@ -2021,11 +2021,43 @@ fn main() {
                         // Act on key press (value == 1) only.
                         if etype == EV_KEY && value == 1 {
                             if code == KEY_VOLUMEUP {
-                                daemon_send("VOL_UP");
-                                eprintln!("[poc] volume up");
+                                let reply = daemon_request("VOL_UP");
+
+                                match reply
+                                    .as_deref()
+                                    .and_then(parse_volume_reply)
+                                {
+                                    Some(percent) => {
+                                        eprintln!(
+                                            "[poc] volume up -> {}%",
+                                            percent
+                                        );
+                                    }
+                                    None => {
+                                        eprintln!(
+                                            "[poc] volume up reply unavailable"
+                                        );
+                                    }
+                                }
                             } else if code == KEY_VOLUMEDOWN {
-                                daemon_send("VOL_DOWN");
-                                eprintln!("[poc] volume down");
+                                let reply = daemon_request("VOL_DOWN");
+
+                                match reply
+                                    .as_deref()
+                                    .and_then(parse_volume_reply)
+                                {
+                                    Some(percent) => {
+                                        eprintln!(
+                                            "[poc] volume down -> {}%",
+                                            percent
+                                        );
+                                    }
+                                    None => {
+                                        eprintln!(
+                                            "[poc] volume down reply unavailable"
+                                        );
+                                    }
+                                }
                             }
                         }
                     }
