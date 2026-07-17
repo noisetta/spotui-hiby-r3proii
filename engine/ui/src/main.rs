@@ -389,6 +389,7 @@ fn format_playback_time(milliseconds: u32) -> String {
 
 const BACKLIGHT_BRIGHTNESS: &str = "/sys/class/backlight/backlight_pwm0/brightness";
 const BATTERY_CAPACITY: &str = "/sys/class/power_supply/battery/capacity";
+const STORAGE_PATH: &[u8] = b"/usr/data\0";
 const BRIGHTNESS_STATE_FILE: &str = "/usr/data/spotui_brightness";
 const THEME_STATE_FILE: &str = "/usr/data/spotui_theme";
 const BRIGHTNESS_LEVELS: [u32; 5] = [100, 80, 60, 40, 25];
@@ -400,6 +401,36 @@ fn read_battery_percent() -> Option<u8> {
         .ok()
         .and_then(|s| s.trim().parse::<u8>().ok())
         .filter(|value| *value <= 100)
+}
+
+/// Return available space on /usr/data in whole mebibytes.
+fn read_storage_free_mb() -> Option<u64> {
+    let mut stats =
+        std::mem::MaybeUninit::<libc::statvfs>::uninit();
+
+    let result = unsafe {
+        libc::statvfs(
+            STORAGE_PATH.as_ptr() as *const libc::c_char,
+            stats.as_mut_ptr(),
+        )
+    };
+
+    if result != 0 {
+        return None;
+    }
+
+    let stats = unsafe { stats.assume_init() };
+    let block_size = if stats.f_frsize > 0 {
+        stats.f_frsize as u64
+    } else {
+        stats.f_bsize as u64
+    };
+
+    Some(
+        (stats.f_bavail as u64)
+            .saturating_mul(block_size)
+            / (1024 * 1024),
+    )
 }
 
 fn load_brightness_idx() -> usize {
@@ -833,6 +864,7 @@ fn draw_list(
     selected: Option<usize>,
     title: &str,
     battery_percent: Option<u8>,
+    storage_free_mb: Option<u64>,
     brightness_idx: usize,
     playback_state: PlaybackState,
     now_playing: Option<&NowPlaying>,
@@ -1037,17 +1069,28 @@ fn draw_list(
             };
 
             let display_label =
-                if app_view == AppView::Diagnostics && index == 0 {
-                    let daemon_status = match playback_state {
-                        PlaybackState::Unknown => "Connecting",
-                        PlaybackState::Stopped => "Stopped",
-                        PlaybackState::Loading => "Loading",
-                        PlaybackState::Playing => "Playing",
-                        PlaybackState::Paused => "Paused",
-                        PlaybackState::Error => "Error",
-                    };
+                if app_view == AppView::Diagnostics {
+                    match index {
+                        0 => {
+                            let daemon_status = match playback_state {
+                                PlaybackState::Unknown => "Connecting",
+                                PlaybackState::Stopped => "Stopped",
+                                PlaybackState::Loading => "Loading",
+                                PlaybackState::Playing => "Playing",
+                                PlaybackState::Paused => "Paused",
+                                PlaybackState::Error => "Error",
+                            };
 
-                    format!("Daemon: {}", daemon_status)
+                            format!("Daemon: {}", daemon_status)
+                        }
+                        1 => match storage_free_mb {
+                            Some(free_mb) => {
+                                format!("Storage: {} MB", free_mb)
+                            }
+                            None => "Storage: Unknown".to_string(),
+                        },
+                        _ => label.to_string(),
+                    }
                 } else if is_active_theme {
                     format!("> {}", label)
                 } else {
@@ -1424,6 +1467,7 @@ fn main() {
     let mut exit_armed = false;
     let title = "Liked Songs";
     let mut battery_percent = read_battery_percent();
+    let mut storage_free_mb = read_storage_free_mb();
     draw_list(
         &mut fb,
         &items,
@@ -1431,6 +1475,7 @@ fn main() {
         selected,
         title,
         battery_percent,
+        storage_free_mb,
         brightness_idx,
         playback_state,
         now_playing.as_ref(),
@@ -1512,6 +1557,7 @@ fn main() {
     let mut last_liked_retry = std::time::Instant::now();
     let mut last_status_check = std::time::Instant::now();
     let mut last_battery_check = std::time::Instant::now();
+    let mut last_storage_check = std::time::Instant::now();
     let startup_time = std::time::Instant::now();
     let mut startup_brightness_applied = false;
 
@@ -2002,6 +2048,21 @@ BRIGHTNESS_LABELS[brightness_idx]
             }
         }
 
+        // Refresh available /usr/data space every 30 seconds.
+        if last_storage_check.elapsed().as_secs() >= 30 {
+            last_storage_check = std::time::Instant::now();
+            let updated = read_storage_free_mb();
+
+            if updated != storage_free_mb {
+                storage_free_mb = updated;
+                dirty = true;
+                eprintln!(
+                    "[poc] storage free -> {:?} MB",
+                    storage_free_mb
+                );
+            }
+        }
+
         // Re-check the output jack roughly once a second so plugging into a
         // different jack (3.5mm <-> 4.4mm) re-routes automatically. Only calls
         // amixer when the detected port actually changes, to avoid churn.
@@ -2034,6 +2095,7 @@ BRIGHTNESS_LABELS[brightness_idx]
                 selected,
                 title,
                 battery_percent,
+                storage_free_mb,
                 brightness_idx,
                 playback_state,
                 now_playing.as_ref(),
