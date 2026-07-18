@@ -307,26 +307,50 @@ fn daemon_playback_state() -> Option<PlaybackState> {
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
-struct LikedQueueStatus {
+enum QueueSource {
+    Liked,
+    Playlist(String),
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct QueueStatus {
+    source: QueueSource,
     index: usize,
     length: usize,
     track_id: String,
 }
 
-/// Query the active Liked Songs queue position.
+/// Query the active playback queue position.
 ///
 /// The outer Option indicates whether a valid daemon response was received.
-/// The inner Option is None when playback is not using the Liked Songs queue.
-fn daemon_liked_queue_status() -> Option<Option<LikedQueueStatus>> {
+/// The inner Option is None when playback is not using a queue.
+fn daemon_queue_status() -> Option<Option<QueueStatus>> {
     let reply = daemon_request("QUEUE_STATUS")?;
 
     if reply == "QUEUE NONE" {
         return Some(None);
     }
 
-    let rest = reply.strip_prefix("QUEUE LIKED ")?;
-    let mut parts = rest.splitn(3, ' ');
+    let (source, rest) =
+        if let Some(rest) = reply.strip_prefix("QUEUE LIKED ") {
+            (QueueSource::Liked, rest)
+        } else if let Some(rest) =
+            reply.strip_prefix("QUEUE PLAYLIST ")
+        {
+            let mut parts = rest.splitn(2, ' ');
+            let playlist_id = parts.next()?.trim().to_string();
+            let remaining = parts.next()?;
 
+            if playlist_id.is_empty() {
+                return None;
+            }
+
+            (QueueSource::Playlist(playlist_id), remaining)
+        } else {
+            return None;
+        };
+
+    let mut parts = rest.splitn(3, ' ');
     let index = parts.next()?.parse::<usize>().ok()?;
     let length = parts.next()?.parse::<usize>().ok()?;
     let track_id = parts.next()?.trim().to_string();
@@ -335,7 +359,8 @@ fn daemon_liked_queue_status() -> Option<Option<LikedQueueStatus>> {
         return None;
     }
 
-    Some(Some(LikedQueueStatus {
+    Some(Some(QueueStatus {
+        source,
         index,
         length,
         track_id,
@@ -2558,10 +2583,26 @@ fn main() {
                                         );
 
                                         if !item_id.is_empty() {
-                                            daemon_send(&format!(
-                                                "LOAD {}",
-                                                item_id
-                                            ));
+                                            let playlist_id =
+                                                playlist_selected
+                                                    .and_then(|selected_index| {
+                                                        playlists.get(
+                                                            selected_index,
+                                                        )
+                                                    })
+                                                    .map(|playlist| {
+                                                        playlist.id.clone()
+                                                    });
+
+                                            if let Some(playlist_id) =
+                                                playlist_id
+                                            {
+                                                daemon_send(&format!(
+                                                    "LOAD_PLAYLIST {} {}",
+                                                    playlist_id,
+                                                    item_id
+                                                ));
+                                            }
                                         }
 
                                         dirty = true;
@@ -2731,45 +2772,134 @@ BRIGHTNESS_LABELS[brightness_idx]
                 }
             }
 
-            if let Some(updated_queue) =
-                daemon_liked_queue_status()
-            {
-                let updated_selected =
-                    updated_queue.as_ref().and_then(|queue| {
-                        let indexed_match = items
-                            .get(queue.index)
-                            .map(|item| {
-                                item.id.as_str()
-                                    == queue.track_id.as_str()
-                            })
-                            .unwrap_or(false);
+            if let Some(updated_queue) = daemon_queue_status() {
+                let mut updated_liked_selected = None;
+                let mut updated_playlist_track_selected = None;
 
-                        if indexed_match {
-                            Some(queue.index)
-                        } else {
-                            items.iter().position(|item| {
-                                item.id.as_str()
-                                    == queue.track_id.as_str()
-                            })
+                if let Some(queue) = updated_queue.as_ref() {
+                    match &queue.source {
+                        QueueSource::Liked => {
+                            let indexed_match = items
+                                .get(queue.index)
+                                .map(|item| {
+                                    item.id.as_str()
+                                        == queue.track_id.as_str()
+                                })
+                                .unwrap_or(false);
+
+                            updated_liked_selected =
+                                if indexed_match {
+                                    Some(queue.index)
+                                } else {
+                                    items.iter().position(|item| {
+                                        item.id.as_str()
+                                            == queue.track_id.as_str()
+                                    })
+                                };
                         }
-                    });
+                        QueueSource::Playlist(queue_playlist_id) => {
+                            let displayed_playlist_matches =
+                                playlist_selected
+                                    .and_then(|selected_index| {
+                                        playlists.get(selected_index)
+                                    })
+                                    .map(|playlist| {
+                                        playlist.id.as_str()
+                                            == queue_playlist_id.as_str()
+                                    })
+                                    .unwrap_or(false);
 
-                if updated_selected != selected {
-                    selected = updated_selected;
+                            if displayed_playlist_matches {
+                                let indexed_match = playlist_tracks
+                                    .get(queue.index)
+                                    .map(|item| {
+                                        item.id.as_str()
+                                            == queue.track_id.as_str()
+                                    })
+                                    .unwrap_or(false);
+
+                                updated_playlist_track_selected =
+                                    if indexed_match {
+                                        Some(queue.index)
+                                    } else {
+                                        playlist_tracks
+                                            .iter()
+                                            .position(|item| {
+                                                item.id.as_str()
+                                                    == queue.track_id.as_str()
+                                            })
+                                    };
+                            }
+                        }
+                    }
+                }
+
+                if updated_liked_selected != selected {
+                    selected = updated_liked_selected;
                     dirty = true;
 
-                    match (selected, updated_queue.as_ref()) {
-                        (Some(index), Some(queue)) => {
+                    match (
+                        selected,
+                        updated_queue.as_ref(),
+                    ) {
+                        (
+                            Some(index),
+                            Some(QueueStatus {
+                                source: QueueSource::Liked,
+                                length,
+                                track_id,
+                                ..
+                            }),
+                        ) => {
                             eprintln!(
                                 "[poc] liked queue selection -> {}/{} ({})",
                                 index + 1,
-                                queue.length,
-                                queue.track_id
+                                length,
+                                track_id
                             );
                         }
                         _ => {
                             eprintln!(
                                 "[poc] liked queue selection -> none"
+                            );
+                        }
+                    }
+                }
+
+                if updated_playlist_track_selected
+                    != playlist_track_selected
+                {
+                    playlist_track_selected =
+                        updated_playlist_track_selected;
+                    dirty = true;
+
+                    match (
+                        playlist_track_selected,
+                        updated_queue.as_ref(),
+                    ) {
+                        (
+                            Some(index),
+                            Some(QueueStatus {
+                                source:
+                                    QueueSource::Playlist(
+                                        playlist_id,
+                                    ),
+                                length,
+                                track_id,
+                                ..
+                            }),
+                        ) => {
+                            eprintln!(
+                                "[poc] playlist {} queue selection -> {}/{} ({})",
+                                playlist_id,
+                                index + 1,
+                                length,
+                                track_id
+                            );
+                        }
+                        _ => {
+                            eprintln!(
+                                "[poc] playlist queue selection -> none"
                             );
                         }
                     }
