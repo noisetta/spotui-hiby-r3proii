@@ -83,6 +83,19 @@ sha256sum \
 
 The release profile is configured for a small binary with link-time optimization, symbol stripping, and abort-on-panic behavior.
 
+## Prepare the daemon build dependency
+
+The SpotUI daemon parses Spotify profile responses for playlist browsing and therefore requires `serde_json` as a direct development dependency in the local librespot checkout.
+
+Ensure `~/mips-toolchain/librespot/Cargo.toml` contains:
+
+```toml
+[dev-dependencies]
+serde_json = "1.0"
+```
+
+This changes only the separate local librespot checkout.
+
 ## Prepare the daemon source
 
 The daemon is built against the local librespot tree. The current source targets the librespot 0.8.0 API.

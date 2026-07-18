@@ -427,6 +427,7 @@ async fn handle_conn<R, W>(
             "SEARCH" => search_tracks(&session, arg).await,
             "LIKED" => liked_tracks(&session).await,
             "PLAYLIST" => playlist_tracks(&session, arg).await,
+            "PLAYLISTS" => public_playlists(&session).await,
             "VOL_UP" => {
                 // Step ~6% of full range per press (~16 steps floor to ceiling).
                 let step = (u16::MAX as u32 * 6 / 100) as u16;
@@ -469,6 +470,94 @@ async fn handle_conn<R, W>(
 fn vol_percent(v: u16) -> u32 {
     (v as u32 * 100) / u16::MAX as u32
 }
+
+/// Fetch playlists exposed through the current users Spotify profile.
+///
+/// This endpoint includes public and followed profile playlists. It does not
+/// expose private playlists or rootlist folder organization.
+async fn public_playlists(session: &Session) -> String {
+    const MAX_PLAYLISTS: usize = 100;
+
+    let username = session.username();
+
+    let response = match session
+        .spclient()
+        .get_user_profile(
+            &username,
+            Some(MAX_PLAYLISTS as u32),
+            Some(0),
+        )
+        .await
+    {
+        Ok(bytes) => bytes,
+        Err(e) => {
+            return format!(
+                "ERR playlist profile fetch failed: {e}\n"
+            );
+        }
+    };
+
+    let profile: serde_json::Value =
+        match serde_json::from_slice(response.as_ref()) {
+            Ok(value) => value,
+            Err(e) => {
+                return format!(
+                    "ERR playlist profile parse failed: {e}\n"
+                );
+            }
+        };
+
+    let Some(playlists) = profile
+        .get("public_playlists")
+        .and_then(serde_json::Value::as_array)
+    else {
+        return concat!(
+            "ERR profile has no public_playlists field",
+            "\n"
+        )
+        .to_string();
+    };
+
+    let mut reply = String::new();
+    let mut count = 0usize;
+
+    for playlist in playlists.iter().take(MAX_PLAYLISTS) {
+        let Some(uri) = playlist
+            .get("uri")
+            .and_then(serde_json::Value::as_str)
+        else {
+            continue;
+        };
+
+        let Some(id) = uri.strip_prefix("spotify:playlist:") else {
+            continue;
+        };
+
+        let name = playlist
+            .get("name")
+            .and_then(serde_json::Value::as_str)
+            .unwrap_or("Untitled Playlist");
+
+        let owner = playlist
+            .get("owner_name")
+            .and_then(serde_json::Value::as_str)
+            .unwrap_or("");
+
+        reply.push_str("PLAYLIST ");
+        reply.push_str(&sanitize_field(id));
+        reply.push_str("\t");
+        reply.push_str(&sanitize_field(name));
+        reply.push_str("\t");
+        reply.push_str(&sanitize_field(owner));
+        reply.push_str("\n");
+
+        count += 1;
+    }
+
+    reply.push_str(&format!("END {count}\n"));
+    reply
+}
+
 
 /// Search via librespot's internal context-resolve (NOT the restricted Web API).
 /// Resolves `spotify:search:<query>` into a Context, takes the first page's
