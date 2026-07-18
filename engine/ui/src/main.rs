@@ -711,6 +711,7 @@ fn daemon_playlist_query(cmd: &str) -> Vec<PlaylistItem> {
 enum AppView {
     Library,
     Playlists,
+    PlaylistTracks,
     Menu,
     Appearance,
     Special,
@@ -1203,10 +1204,13 @@ fn draw_list(
     fb: &mut Framebuffer,
     items: &[TrackItem],
     playlists: &[PlaylistItem],
+    playlist_tracks: &[TrackItem],
     scroll: usize,
     playlist_scroll: usize,
+    playlist_track_scroll: usize,
     selected: Option<usize>,
     playlist_selected: Option<usize>,
+    playlist_track_selected: Option<usize>,
     title: &str,
     battery_percent: Option<u8>,
     storage_free_mb: Option<u64>,
@@ -1235,6 +1239,7 @@ fn draw_list(
     let header_title = match app_view {
         AppView::Library => title,
         AppView::Playlists => "Playlists",
+        AppView::PlaylistTracks => "Playlist",
         AppView::Menu => "More",
         AppView::Appearance => "Appearance",
         AppView::Special => "Special",
@@ -1296,6 +1301,15 @@ fn draw_list(
             let end =
                 (playlist_scroll + VISIBLE_ROWS).min(playlists.len());
             (playlist_scroll, playlists.len(), end)
+        }
+        AppView::PlaylistTracks => {
+            let end = (playlist_track_scroll + VISIBLE_ROWS)
+                .min(playlist_tracks.len());
+            (
+                playlist_track_scroll,
+                playlist_tracks.len(),
+                end,
+            )
         }
         _ => (0, 0, 0),
     };
@@ -1418,13 +1432,75 @@ fn draw_list(
                 .ok();
             }
         }
+        AppView::PlaylistTracks => {
+            for (row, index) in
+                (playlist_track_scroll..list_end).enumerate()
+            {
+                let item = &playlist_tracks[index];
+                let mut label = item.label();
+                let y = 40 + row as i32 * ROW_HEIGHT;
+                let is_selected =
+                    playlist_track_selected == Some(index);
+
+                label = truncate_label(
+                    &label,
+                    if is_selected { 50 } else { 52 },
+                );
+
+                if is_selected {
+                    Rectangle::new(
+                        Point::new(0, y),
+                        Size::new(
+                            WIDTH as u32,
+                            ROW_HEIGHT as u32,
+                        ),
+                    )
+                    .into_styled(PrimitiveStyle::with_fill(
+                        palette.selected_row,
+                    ))
+                    .draw(fb)
+                    .ok();
+
+                    let selected_label = format!("> {}", label);
+                    Text::with_baseline(
+                        &selected_label,
+                        Point::new(10, y + 22),
+                        sel_style,
+                        Baseline::Top,
+                    )
+                    .draw(fb)
+                    .ok();
+                } else {
+                    Text::with_baseline(
+                        &label,
+                        Point::new(10, y + 22),
+                        text_style,
+                        Baseline::Top,
+                    )
+                    .draw(fb)
+                    .ok();
+                }
+
+                Rectangle::new(
+                    Point::new(0, y + ROW_HEIGHT - 1),
+                    Size::new(WIDTH as u32, 1),
+                )
+                .into_styled(PrimitiveStyle::with_fill(
+                    palette.border,
+                ))
+                .draw(fb)
+                .ok();
+            }
+        }
         _ => {}
     }
 
     // Header scroll indicators.
     if matches!(
         app_view,
-        AppView::Library | AppView::Playlists
+        AppView::Library
+            | AppView::Playlists
+            | AppView::PlaylistTracks
     ) && list_scroll > 0
     {
         Text::with_baseline(
@@ -1439,7 +1515,9 @@ fn draw_list(
 
     if matches!(
         app_view,
-        AppView::Library | AppView::Playlists
+        AppView::Library
+            | AppView::Playlists
+            | AppView::PlaylistTracks
     ) && list_end < list_length
     {
         Text::with_baseline(
@@ -1455,7 +1533,7 @@ fn draw_list(
     // Menu screens replace the visible library area while preserving
     // the header, now-playing strip, and toolbar.
     let visible_menu_labels = match app_view {
-        AppView::Library | AppView::Playlists => None,
+        AppView::Library | AppView::Playlists | AppView::PlaylistTracks => None,
         AppView::Menu => Some(&MENU_LABELS),
         AppView::Appearance => Some(&APPEARANCE_LABELS),
         AppView::Special => Some(&SPECIAL_LABELS),
@@ -1523,6 +1601,7 @@ fn draw_list(
                 },
                 AppView::Library
                 | AppView::Playlists
+                | AppView::PlaylistTracks
                 | AppView::Menu
                 | AppView::Diagnostics => false,
             };
@@ -1617,7 +1696,7 @@ fn draw_list(
         if playback_state.is_paused() { "Resume" } else { "Pause" };
     let menu_label = match app_view {
         AppView::Library => "More",
-        AppView::Playlists => "Back",
+        AppView::Playlists | AppView::PlaylistTracks => "Back",
         AppView::Menu
         | AppView::Appearance
         | AppView::Special
@@ -1818,6 +1897,9 @@ fn main() {
     let mut playlists: Vec<PlaylistItem> = Vec::new();
     let mut playlist_selected: Option<usize> = None;
     let mut playlist_scroll: usize = 0;
+    let mut playlist_tracks: Vec<TrackItem> = Vec::new();
+    let mut playlist_track_selected: Option<usize> = None;
+    let mut playlist_track_scroll: usize = 0;
 
     let mut brightness_idx: usize = load_brightness_idx();
     let mut selected: Option<usize> = None;
@@ -1838,10 +1920,13 @@ fn main() {
         &mut fb,
         &items,
         &playlists,
+        &playlist_tracks,
         scroll,
         playlist_scroll,
+        playlist_track_scroll,
         selected,
         playlist_selected,
+        playlist_track_selected,
         title,
         battery_percent,
         storage_free_mb,
@@ -2015,6 +2100,28 @@ fn main() {
                                                 playlist_scroll
                                             );
                                         }
+                                        AppView::PlaylistTracks => {
+                                            let max_scroll = playlist_tracks
+                                                .len()
+                                                .saturating_sub(VISIBLE_ROWS);
+
+                                            if cur_x < WIDTH as i32 - 120 {
+                                                playlist_track_scroll =
+                                                    playlist_track_scroll
+                                                        .saturating_sub(page);
+                                            } else {
+                                                playlist_track_scroll =
+                                                    (playlist_track_scroll
+                                                        + page)
+                                                        .min(max_scroll);
+                                            }
+
+                                            dirty = true;
+                                            eprintln!(
+                                                "[poc] playlist track scroll -> {}",
+                                                playlist_track_scroll
+                                            );
+                                        }
                                         _ => {}
                                     }
                                 } else if cur_y >= TOOLBAR_TOP {
@@ -2061,6 +2168,9 @@ fn main() {
                                             app_view = match app_view {
                                                 AppView::Library => AppView::Menu,
                                                 AppView::Playlists => AppView::Menu,
+                                                AppView::PlaylistTracks => {
+                                                    AppView::Playlists
+                                                }
                                                 AppView::Menu => AppView::Library,
                                                 AppView::Appearance => AppView::Menu,
                                                 AppView::Special => AppView::Appearance,
@@ -2145,7 +2255,8 @@ fn main() {
                                         AppView::Special => &SPECIAL_LABELS,
                                         AppView::Diagnostics => &DIAGNOSTICS_LABELS,
                                         AppView::Library
-                                        | AppView::Playlists => &MENU_LABELS,
+                                        | AppView::Playlists
+                                        | AppView::PlaylistTracks => &MENU_LABELS,
                                     };
 
                                     if let Some(label) =
@@ -2321,7 +2432,8 @@ fn main() {
                                                 }
                                             }
                                             AppView::Library
-                                            | AppView::Playlists => {}
+                                            | AppView::Playlists
+                                            | AppView::PlaylistTracks => {}
                                         }
                                     }
                                 } else if app_view
@@ -2337,18 +2449,85 @@ fn main() {
                                         playlist_selected = Some(index);
                                         exit_armed = false;
 
-                                        let playlist =
-                                            &playlists[index];
+                                        let playlist_id =
+                                            playlists[index].id.clone();
+                                        let playlist_name =
+                                            playlists[index].name.clone();
 
                                         eprintln!(
                                             "[poc] selected playlist {} ({})",
-                                            playlist.name,
-                                            playlist.id
+                                            playlist_name,
+                                            playlist_id
                                         );
 
-                                        // Selection only for this stage.
-                                        // Playlist IDs must never be sent as
-                                        // LOAD track commands.
+                                        if !playlist_id.is_empty() {
+                                            let fetched = daemon_query(
+                                                &format!(
+                                                    "PLAYLIST {}",
+                                                    playlist_id
+                                                ),
+                                            );
+                                            let track_count = fetched.len();
+
+                                            playlist_tracks =
+                                                if fetched.is_empty() {
+                                                    vec![TrackItem {
+                                                        id: String::new(),
+                                                        name:
+                                                            "No tracks found"
+                                                                .to_string(),
+                                                        artist: String::new(),
+                                                    }]
+                                                } else {
+                                                    fetched
+                                                };
+
+                                            playlist_track_scroll = 0;
+                                            playlist_track_selected = None;
+                                            app_view =
+                                                AppView::PlaylistTracks;
+
+                                            eprintln!(
+                                                "[poc] loaded {} tracks from playlist {}",
+                                                track_count,
+                                                playlist_name
+                                            );
+                                        }
+
+                                        dirty = true;
+                                    }
+                                } else if app_view
+                                    == AppView::PlaylistTracks
+                                {
+                                    let rel = cur_y - LIST_TOP;
+                                    let visible_row =
+                                        (rel / ROW_HEIGHT) as usize;
+                                    let index =
+                                        playlist_track_scroll + visible_row;
+
+                                    if index < playlist_tracks.len() {
+                                        playlist_track_selected = Some(index);
+                                        exit_armed = false;
+
+                                        let item_id =
+                                            playlist_tracks[index].id.clone();
+                                        let item_name =
+                                            playlist_tracks[index].name.clone();
+
+                                        eprintln!(
+                                            "[poc] tapped playlist track {}: {} ({})",
+                                            index,
+                                            item_name,
+                                            item_id
+                                        );
+
+                                        if !item_id.is_empty() {
+                                            daemon_send(&format!(
+                                                "LOAD {}",
+                                                item_id
+                                            ));
+                                        }
+
                                         dirty = true;
                                     }
                                 } else {
@@ -2658,10 +2837,13 @@ BRIGHTNESS_LABELS[brightness_idx]
                 &mut fb,
                 &items,
                 &playlists,
+                &playlist_tracks,
                 scroll,
                 playlist_scroll,
+                playlist_track_scroll,
                 selected,
                 playlist_selected,
+                playlist_track_selected,
                 title,
                 battery_percent,
                 storage_free_mb,
