@@ -10,10 +10,12 @@
 //
 // Commands (newline-terminated, sent to the socket):
 //   LOAD <base62_track_id>   -> load + play a single track
+//   LOAD_LIKED <track_id>     -> load within the Liked Songs queue
 //   PLAY                     -> resume
 //   PAUSE                    -> pause
 //   STOP                     -> stop
 //   STATUS                   -> report current playback state
+//   QUEUE_STATUS             -> report the active queue position
 //   NOW_PLAYING              -> report current track metadata
 //   POSITION                 -> report playback position in milliseconds
 //   SEEK <milliseconds>      -> seek within the loaded track
@@ -57,6 +59,12 @@ struct NowPlaying {
     title: String,
     artist: String,
     duration_ms: u32,
+}
+
+#[derive(Default)]
+struct LikedQueue {
+    track_ids: Vec<String>,
+    current_index: Option<usize>,
 }
 
 /// Keep line-oriented protocol fields from containing separators.
@@ -142,13 +150,90 @@ async fn main() {
     let playback_state = Arc::new(RwLock::new("STOPPED"));
     let now_playing = Arc::new(RwLock::new(None::<NowPlaying>));
     let playback_position = Arc::new(RwLock::new(None::<u32>));
+    let liked_queue = Arc::new(RwLock::new(LikedQueue::default()));
+    let event_player = player.clone();
     let event_state = playback_state.clone();
     let event_now_playing = now_playing.clone();
     let event_position = playback_position.clone();
+    let event_liked_queue = liked_queue.clone();
     let mut player_events = player.get_player_event_channel();
 
     tokio::spawn(async move {
         while let Some(event) = player_events.recv().await {
+            if let PlayerEvent::EndOfTrack { track_id, .. } = &event {
+                let ended_id = spotify_track_base62(track_id);
+                let mut next_track = None;
+
+                {
+                    let mut queue = event_liked_queue.write().await;
+
+                    if let (Some(current_index), Some(ended_id)) =
+                        (queue.current_index, ended_id.as_deref())
+                    {
+                        let current_matches = queue
+                            .track_ids
+                            .get(current_index)
+                            .map(String::as_str)
+                            == Some(ended_id);
+
+                        if current_matches {
+                            let next_index = current_index + 1;
+                            let next_id =
+                                queue.track_ids.get(next_index).cloned();
+
+                            if let Some(next_id) = next_id {
+                                let queue_len = queue.track_ids.len();
+                                queue.current_index = Some(next_index);
+                                next_track =
+                                    Some((next_index, queue_len, next_id));
+                            } else {
+                                eprintln!(
+                                    "[spotui] liked queue finished at {}/{}",
+                                    current_index + 1,
+                                    queue.track_ids.len()
+                                );
+                                queue.current_index = None;
+                            }
+                        } else {
+                            eprintln!(
+                                "[spotui] ignored stale liked queue end event for {}",
+                                ended_id
+                            );
+                        }
+                    }
+                }
+
+                if let Some((next_index, queue_len, next_id)) = next_track {
+                    match SpotifyId::from_base62(&next_id) {
+                        Ok(id) => {
+                            eprintln!(
+                                "[spotui] liked queue advance -> {}/{} ({})",
+                                next_index + 1,
+                                queue_len,
+                                next_id
+                            );
+                            event_player.load(
+                                SpotifyUri::Track { id },
+                                true,
+                                0,
+                            );
+                            continue;
+                        }
+                        Err(e) => {
+                            eprintln!(
+                                "[spotui] liked queue next id invalid '{}': {}",
+                                next_id,
+                                e
+                            );
+                            event_liked_queue
+                                .write()
+                                .await
+                                .current_index = None;
+                        }
+                    }
+                }
+            }
+
             let new_state = match &event {
                 PlayerEvent::Loading { .. } => Some("LOADING"),
                 PlayerEvent::Playing { .. } => Some("PLAYING"),
@@ -266,6 +351,7 @@ async fn main() {
     let unix_playback_state = playback_state.clone();
     let unix_now_playing = now_playing.clone();
     let unix_playback_position = playback_position.clone();
+    let unix_liked_queue = liked_queue.clone();
     let unix_task = tokio::spawn(async move {
         loop {
             match unix_listener.accept().await {
@@ -276,6 +362,7 @@ async fn main() {
                     let playback_state = unix_playback_state.clone();
                     let now_playing = unix_now_playing.clone();
                     let playback_position = unix_playback_position.clone();
+                    let liked_queue = unix_liked_queue.clone();
                     tokio::spawn(async move {
                         let (r, w) = stream.into_split();
                         handle_conn(
@@ -287,6 +374,7 @@ async fn main() {
                             playback_state,
                             now_playing,
                             playback_position,
+                            liked_queue,
                         )
                         .await;
                     });
@@ -302,6 +390,7 @@ async fn main() {
     let tcp_playback_state = playback_state.clone();
     let tcp_now_playing = now_playing.clone();
     let tcp_playback_position = playback_position.clone();
+    let tcp_liked_queue = liked_queue.clone();
     let tcp_task = tokio::spawn(async move {
         loop {
             match tcp_listener.accept().await {
@@ -312,6 +401,7 @@ async fn main() {
                     let playback_state = tcp_playback_state.clone();
                     let now_playing = tcp_now_playing.clone();
                     let playback_position = tcp_playback_position.clone();
+                    let liked_queue = tcp_liked_queue.clone();
                     tokio::spawn(async move {
                         let (r, w) = stream.into_split();
                         handle_conn(
@@ -323,6 +413,7 @@ async fn main() {
                             playback_state,
                             now_playing,
                             playback_position,
+                            liked_queue,
                         )
                         .await;
                     });
@@ -348,6 +439,7 @@ async fn handle_conn<R, W>(
     playback_state: Arc<RwLock<&'static str>>,
     now_playing: Arc<RwLock<Option<NowPlaying>>>,
     playback_position: Arc<RwLock<Option<u32>>>,
+    liked_queue: Arc<RwLock<LikedQueue>>,
 ) where
     R: tokio::io::AsyncRead + Unpin,
     W: tokio::io::AsyncWrite + Unpin,
@@ -366,11 +458,47 @@ async fn handle_conn<R, W>(
         let reply: String = match cmd.as_str() {
             "LOAD" => match SpotifyId::from_base62(arg) {
                 Ok(id) => {
+                    *liked_queue.write().await =
+                        LikedQueue::default();
                     let track = SpotifyUri::Track { id };
                     player.load(track, true, 0);
                     format!("OK loading {arg}\n")
                 }
                 Err(e) => format!("ERR bad track id '{arg}': {e}\n"),
+            },
+            "LOAD_LIKED" => match liked_track_ids(&session).await {
+                Ok(track_ids) => {
+                    match track_ids.iter().position(|id| id == arg) {
+                        Some(index) => match SpotifyId::from_base62(arg) {
+                            Ok(id) => {
+                                let queue_len = track_ids.len();
+                                *liked_queue.write().await = LikedQueue {
+                                    track_ids,
+                                    current_index: Some(index),
+                                };
+                                player.load(
+                                    SpotifyUri::Track { id },
+                                    true,
+                                    0,
+                                );
+                                eprintln!(
+                                    "[spotui] liked queue loaded -> {}/{} ({})",
+                                    index + 1,
+                                    queue_len,
+                                    arg
+                                );
+                                format!("OK loading liked {arg}\n")
+                            }
+                            Err(e) => format!(
+                                "ERR bad track id '{arg}': {e}\n"
+                            ),
+                        },
+                        None => format!(
+                            "ERR track '{arg}' is not in Liked Songs\n"
+                        ),
+                    }
+                }
+                Err(e) => format!("ERR liked queue fetch failed: {e}\n"),
             },
             "PLAY" => {
                 player.play();
@@ -381,12 +509,32 @@ async fn handle_conn<R, W>(
                 "OK pause\n".to_string()
             }
             "STOP" => {
+                *liked_queue.write().await =
+                    LikedQueue::default();
                 player.stop();
                 "OK stop\n".to_string()
             }
             "STATUS" => {
                 let state = *playback_state.read().await;
                 format!("STATUS {state}\n")
+            }
+            "QUEUE_STATUS" => {
+                let queue = liked_queue.read().await;
+
+                match queue.current_index.and_then(|index| {
+                    queue
+                        .track_ids
+                        .get(index)
+                        .map(|track_id| (index, track_id))
+                }) {
+                    Some((index, track_id)) => format!(
+                        "QUEUE LIKED {} {} {}\n",
+                        index,
+                        queue.track_ids.len(),
+                        track_id
+                    ),
+                    None => "QUEUE NONE\n".to_string(),
+                }
             }
             "NOW_PLAYING" => {
                 let current = now_playing.read().await;
@@ -586,6 +734,51 @@ async fn liked_tracks(session: &Session) -> String {
     let user = session.username();
     let uri = format!("spotify:user:{user}:collection");
     context_to_results(session, &uri).await
+}
+
+/// Fetch the same ordered Liked Songs IDs exposed by `LIKED`.
+async fn liked_track_ids(session: &Session) -> Result<Vec<String>, String> {
+    const MAX_RESULTS: usize = 50;
+
+    let user = session.username();
+    let uri = format!("spotify:user:{user}:collection");
+    let context = session
+        .spclient()
+        .get_context(&uri)
+        .await
+        .map_err(|e| format!("context failed: {e}"))?;
+
+    let mut track_ids = Vec::new();
+
+    for page in &context.pages {
+        for track in &page.tracks {
+            let Some(uri) = track.uri.as_ref() else {
+                continue;
+            };
+            let Some(id) = uri.strip_prefix("spotify:track:") else {
+                continue;
+            };
+
+            track_ids.push(id.to_string());
+
+            if track_ids.len() >= MAX_RESULTS {
+                break;
+            }
+        }
+
+        if !track_ids.is_empty() {
+            break;
+        }
+    }
+
+    Ok(track_ids)
+}
+
+fn spotify_track_base62(uri: &SpotifyUri) -> Option<String> {
+    match uri {
+        SpotifyUri::Track { id } => id.to_base62().ok(),
+        _ => None,
+    }
 }
 
 /// Resolve any context URI (search, collection, artist, etc.) into enriched

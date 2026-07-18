@@ -306,6 +306,42 @@ fn daemon_playback_state() -> Option<PlaybackState> {
     PlaybackState::from_status_reply(reply.trim())
 }
 
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct LikedQueueStatus {
+    index: usize,
+    length: usize,
+    track_id: String,
+}
+
+/// Query the active Liked Songs queue position.
+///
+/// The outer Option indicates whether a valid daemon response was received.
+/// The inner Option is None when playback is not using the Liked Songs queue.
+fn daemon_liked_queue_status() -> Option<Option<LikedQueueStatus>> {
+    let reply = daemon_request("QUEUE_STATUS")?;
+
+    if reply == "QUEUE NONE" {
+        return Some(None);
+    }
+
+    let rest = reply.strip_prefix("QUEUE LIKED ")?;
+    let mut parts = rest.splitn(3, ' ');
+
+    let index = parts.next()?.parse::<usize>().ok()?;
+    let length = parts.next()?.parse::<usize>().ok()?;
+    let track_id = parts.next()?.trim().to_string();
+
+    if track_id.is_empty() || index >= length {
+        return None;
+    }
+
+    Some(Some(LikedQueueStatus {
+        index,
+        length,
+        track_id,
+    }))
+}
+
 /// Metadata for the track currently loaded by the daemon.
 #[derive(Clone, Debug, PartialEq, Eq)]
 struct NowPlaying {
@@ -2548,7 +2584,10 @@ fn main() {
                                         );
 
                                         if !item_id.is_empty() {
-                                            daemon_send(&format!("LOAD {}", item_id));
+                                            daemon_send(&format!(
+                                                "LOAD_LIKED {}",
+                                                item_id
+                                            ));
                                         }
 
                                         dirty = true;
@@ -2691,6 +2730,52 @@ BRIGHTNESS_LABELS[brightness_idx]
                     }
                 }
             }
+
+            if let Some(updated_queue) =
+                daemon_liked_queue_status()
+            {
+                let updated_selected =
+                    updated_queue.as_ref().and_then(|queue| {
+                        let indexed_match = items
+                            .get(queue.index)
+                            .map(|item| {
+                                item.id.as_str()
+                                    == queue.track_id.as_str()
+                            })
+                            .unwrap_or(false);
+
+                        if indexed_match {
+                            Some(queue.index)
+                        } else {
+                            items.iter().position(|item| {
+                                item.id.as_str()
+                                    == queue.track_id.as_str()
+                            })
+                        }
+                    });
+
+                if updated_selected != selected {
+                    selected = updated_selected;
+                    dirty = true;
+
+                    match (selected, updated_queue.as_ref()) {
+                        (Some(index), Some(queue)) => {
+                            eprintln!(
+                                "[poc] liked queue selection -> {}/{} ({})",
+                                index + 1,
+                                queue.length,
+                                queue.track_id
+                            );
+                        }
+                        _ => {
+                            eprintln!(
+                                "[poc] liked queue selection -> none"
+                            );
+                        }
+                    }
+                }
+            }
+
             if let Some(updated_position) = daemon_playback_position() {
                 if updated_position != playback_position {
                     let should_log = match (playback_position, updated_position) {
