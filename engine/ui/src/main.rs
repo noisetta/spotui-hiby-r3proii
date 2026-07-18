@@ -2269,11 +2269,12 @@ BRIGHTNESS_LABELS[brightness_idx]
             dirty = true;
         }
 
-        // Re-check the output jack roughly once a second so plugging into a
-        // different jack (3.5mm <-> 4.4mm) re-routes automatically. Only calls
-        // amixer when the detected port actually changes, to avoid churn.
+        // Re-check the output jack roughly once a second. Removing an active
+        // output pauses playback. Connecting a jack selects its route but does
+        // not resume automatically, preventing unexpected audio output.
         if last_jack_check.elapsed().as_millis() >= 1000 {
             last_jack_check = std::time::Instant::now();
+
             let detected = if switch_active(SW_BALANCE) {
                 Some(PORT_44MM)
             } else if switch_active(SW_HEADSET) {
@@ -2281,11 +2282,39 @@ BRIGHTNESS_LABELS[brightness_idx]
             } else {
                 None
             };
+
             if detected != last_port {
-                if let Some(p) = detected {
-                    set_output_port(p);
-                    eprintln!("[poc] jack change -> output port {p}");
+                let previous_port = last_port;
+                let current_state =
+                    daemon_playback_state().unwrap_or(playback_state);
+
+                if previous_port.is_some()
+                    && current_state == PlaybackState::Playing
+                {
+                    daemon_send("PAUSE");
+                    playback_state = PlaybackState::Paused;
+                    dirty = true;
+
+                    eprintln!(
+                        "[poc] jack removed or switched -> paused playback"
+                    );
                 }
+
+                match detected {
+                    Some(port) => {
+                        set_output_port(port);
+                        eprintln!(
+                            "[poc] jack change -> output port {}",
+                            port
+                        );
+                    }
+                    None => {
+                        eprintln!(
+                            "[poc] jack change -> no jack detected"
+                        );
+                    }
+                }
+
                 last_port = detected;
             }
         }
