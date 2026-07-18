@@ -397,6 +397,25 @@ impl TrackItem {
     }
 }
 
+/// A playlist fetched from the daemon PLAYLISTS command.
+#[derive(Clone)]
+struct PlaylistItem {
+    id: String,
+    name: String,
+    owner: String,
+}
+
+impl PlaylistItem {
+    /// Display label for a playlist row.
+    fn label(&self) -> String {
+        if self.owner.is_empty() {
+            self.name.clone()
+        } else {
+            format!("{} - {}", self.name, self.owner)
+        }
+    }
+}
+
 fn truncate_label(s: &str, max_chars: usize) -> String {
     let count = s.chars().count();
     if count <= max_chars {
@@ -615,10 +634,83 @@ fn daemon_query(cmd: &str) -> Vec<TrackItem> {
     items
 }
 
+/// Send a playlist-listing command and parse its multiline response.
+///
+/// Expected lines:
+/// `PLAYLIST <id>\t<name>\t<owner>`
+/// followed by `END <count>`.
+fn daemon_playlist_query(cmd: &str) -> Vec<PlaylistItem> {
+    let mut playlists = Vec::new();
+
+    let mut socket = match UnixStream::connect(DAEMON_SOCK) {
+        Ok(socket) => socket,
+        Err(e) => {
+            eprintln!(
+                "[poc] daemon_playlist_query connect failed: {e}"
+            );
+            return playlists;
+        }
+    };
+
+    if socket.write_all(cmd.as_bytes()).is_err()
+        || socket.write_all(b"\n").is_err()
+    {
+        return playlists;
+    }
+
+    // Profile playlist responses are bounded to at most 100 entries.
+    let mut buffer = Vec::new();
+    let mut chunk = [0u8; 2048];
+
+    loop {
+        match socket.read(&mut chunk) {
+            Ok(0) => break,
+            Ok(read) => {
+                buffer.extend_from_slice(&chunk[..read]);
+
+                let response = String::from_utf8_lossy(&buffer);
+                if response
+                    .lines()
+                    .any(|line| line.starts_with("END "))
+                {
+                    break;
+                }
+            }
+            Err(_) => break,
+        }
+    }
+
+    let response = String::from_utf8_lossy(&buffer);
+
+    for line in response.lines() {
+        if let Some(rest) = line.strip_prefix("PLAYLIST ") {
+            let mut parts = rest.splitn(3, '\t');
+
+            let id =
+                parts.next().unwrap_or("").trim().to_string();
+            let name =
+                parts.next().unwrap_or("").trim().to_string();
+            let owner =
+                parts.next().unwrap_or("").trim().to_string();
+
+            if !id.is_empty() {
+                playlists.push(PlaylistItem {
+                    id,
+                    name,
+                    owner,
+                });
+            }
+        }
+    }
+
+    playlists
+}
+
 /// Main content displayed above the now-playing strip.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum AppView {
     Library,
+    Playlists,
     Menu,
     Appearance,
     Special,
@@ -1110,8 +1202,11 @@ fn draw_now_playing_strip(
 fn draw_list(
     fb: &mut Framebuffer,
     items: &[TrackItem],
+    playlists: &[PlaylistItem],
     scroll: usize,
+    playlist_scroll: usize,
     selected: Option<usize>,
+    playlist_selected: Option<usize>,
     title: &str,
     battery_percent: Option<u8>,
     storage_free_mb: Option<u64>,
@@ -1139,6 +1234,7 @@ fn draw_list(
     let header_style = MonoTextStyle::new(&FONT_9X15_BOLD, palette.header_text);
     let header_title = match app_view {
         AppView::Library => title,
+        AppView::Playlists => "Playlists",
         AppView::Menu => "More",
         AppView::Appearance => "Appearance",
         AppView::Special => "Special",
@@ -1188,42 +1284,149 @@ fn draw_list(
     .ok();
 
     let text_style = MonoTextStyle::new(&FONT_9X15, palette.text);
-    let sel_style = MonoTextStyle::new(&FONT_9X15_BOLD, palette.selected_text);
+    let sel_style =
+        MonoTextStyle::new(&FONT_9X15_BOLD, palette.selected_text);
 
-    // Render the visible window of items.
-    let end = (scroll + VISIBLE_ROWS).min(items.len());
-    for (row, i) in (scroll..end).enumerate() {
-        let item = &items[i];
-        let mut label = item.label();
-        let y = 40 + row as i32 * ROW_HEIGHT;
-        let is_sel = selected == Some(i);
-
-        label = truncate_label(&label, if is_sel { 50 } else { 52 });
-
-        if is_sel {
-            Rectangle::new(Point::new(0, y), Size::new(WIDTH as u32, ROW_HEIGHT as u32))
-                .into_styled(PrimitiveStyle::with_fill(palette.selected_row))
-                .draw(fb)
-                .ok();
-            let selected_label = format!("> {}", label);
-              Text::with_baseline(&selected_label, Point::new(10, y + 22), sel_style, Baseline::Top)
-                  .draw(fb)
-                .ok();
-        } else {
-            Text::with_baseline(&label, Point::new(10, y + 22), text_style, Baseline::Top)
-                .draw(fb)
-                .ok();
+    let (list_scroll, list_length, list_end) = match app_view {
+        AppView::Library => {
+            let end = (scroll + VISIBLE_ROWS).min(items.len());
+            (scroll, items.len(), end)
         }
-        // separator line
-        Rectangle::new(Point::new(0, y + ROW_HEIGHT - 1), Size::new(WIDTH as u32, 1))
-            .into_styled(PrimitiveStyle::with_fill(palette.border))
-            .draw(fb)
-            .ok();
+        AppView::Playlists => {
+            let end =
+                (playlist_scroll + VISIBLE_ROWS).min(playlists.len());
+            (playlist_scroll, playlists.len(), end)
+        }
+        _ => (0, 0, 0),
+    };
+
+    match app_view {
+        AppView::Library => {
+            for (row, index) in (scroll..list_end).enumerate() {
+                let item = &items[index];
+                let mut label = item.label();
+                let y = 40 + row as i32 * ROW_HEIGHT;
+                let is_selected = selected == Some(index);
+
+                label = truncate_label(
+                    &label,
+                    if is_selected { 50 } else { 52 },
+                );
+
+                if is_selected {
+                    Rectangle::new(
+                        Point::new(0, y),
+                        Size::new(
+                            WIDTH as u32,
+                            ROW_HEIGHT as u32,
+                        ),
+                    )
+                    .into_styled(PrimitiveStyle::with_fill(
+                        palette.selected_row,
+                    ))
+                    .draw(fb)
+                    .ok();
+
+                    let selected_label = format!("> {}", label);
+                    Text::with_baseline(
+                        &selected_label,
+                        Point::new(10, y + 22),
+                        sel_style,
+                        Baseline::Top,
+                    )
+                    .draw(fb)
+                    .ok();
+                } else {
+                    Text::with_baseline(
+                        &label,
+                        Point::new(10, y + 22),
+                        text_style,
+                        Baseline::Top,
+                    )
+                    .draw(fb)
+                    .ok();
+                }
+
+                Rectangle::new(
+                    Point::new(0, y + ROW_HEIGHT - 1),
+                    Size::new(WIDTH as u32, 1),
+                )
+                .into_styled(PrimitiveStyle::with_fill(
+                    palette.border,
+                ))
+                .draw(fb)
+                .ok();
+            }
+        }
+        AppView::Playlists => {
+            for (row, index) in
+                (playlist_scroll..list_end).enumerate()
+            {
+                let playlist = &playlists[index];
+                let mut label = playlist.label();
+                let y = 40 + row as i32 * ROW_HEIGHT;
+                let is_selected =
+                    playlist_selected == Some(index);
+
+                label = truncate_label(
+                    &label,
+                    if is_selected { 50 } else { 52 },
+                );
+
+                if is_selected {
+                    Rectangle::new(
+                        Point::new(0, y),
+                        Size::new(
+                            WIDTH as u32,
+                            ROW_HEIGHT as u32,
+                        ),
+                    )
+                    .into_styled(PrimitiveStyle::with_fill(
+                        palette.selected_row,
+                    ))
+                    .draw(fb)
+                    .ok();
+
+                    let selected_label = format!("> {}", label);
+                    Text::with_baseline(
+                        &selected_label,
+                        Point::new(10, y + 22),
+                        sel_style,
+                        Baseline::Top,
+                    )
+                    .draw(fb)
+                    .ok();
+                } else {
+                    Text::with_baseline(
+                        &label,
+                        Point::new(10, y + 22),
+                        text_style,
+                        Baseline::Top,
+                    )
+                    .draw(fb)
+                    .ok();
+                }
+
+                Rectangle::new(
+                    Point::new(0, y + ROW_HEIGHT - 1),
+                    Size::new(WIDTH as u32, 1),
+                )
+                .into_styled(PrimitiveStyle::with_fill(
+                    palette.border,
+                ))
+                .draw(fb)
+                .ok();
+            }
+        }
+        _ => {}
     }
 
     // Header scroll indicators.
-    // Tapping most of the header pages up; the far-right section pages down.
-    if app_view == AppView::Library && scroll > 0 {
+    if matches!(
+        app_view,
+        AppView::Library | AppView::Playlists
+    ) && list_scroll > 0
+    {
         Text::with_baseline(
             "^",
             Point::new(WIDTH as i32 - 112, 12),
@@ -1234,7 +1437,11 @@ fn draw_list(
         .ok();
     }
 
-    if app_view == AppView::Library && end < items.len() {
+    if matches!(
+        app_view,
+        AppView::Library | AppView::Playlists
+    ) && list_end < list_length
+    {
         Text::with_baseline(
             "v",
             Point::new(WIDTH as i32 - 88, 12),
@@ -1248,7 +1455,7 @@ fn draw_list(
     // Menu screens replace the visible library area while preserving
     // the header, now-playing strip, and toolbar.
     let visible_menu_labels = match app_view {
-        AppView::Library => None,
+        AppView::Library | AppView::Playlists => None,
         AppView::Menu => Some(&MENU_LABELS),
         AppView::Appearance => Some(&APPEARANCE_LABELS),
         AppView::Special => Some(&SPECIAL_LABELS),
@@ -1315,6 +1522,7 @@ fn draw_list(
                     _ => false,
                 },
                 AppView::Library
+                | AppView::Playlists
                 | AppView::Menu
                 | AppView::Diagnostics => false,
             };
@@ -1409,6 +1617,7 @@ fn draw_list(
         if playback_state.is_paused() { "Resume" } else { "Pause" };
     let menu_label = match app_view {
         AppView::Library => "More",
+        AppView::Playlists => "Back",
         AppView::Menu
         | AppView::Appearance
         | AppView::Special
@@ -1606,6 +1815,10 @@ fn main() {
         });
     }
 
+    let mut playlists: Vec<PlaylistItem> = Vec::new();
+    let mut playlist_selected: Option<usize> = None;
+    let mut playlist_scroll: usize = 0;
+
     let mut brightness_idx: usize = load_brightness_idx();
     let mut selected: Option<usize> = None;
     let mut scroll: usize = 0;
@@ -1624,8 +1837,11 @@ fn main() {
     draw_list(
         &mut fb,
         &items,
+        &playlists,
         scroll,
+        playlist_scroll,
         selected,
+        playlist_selected,
         title,
         battery_percent,
         storage_free_mb,
@@ -1756,27 +1972,50 @@ fn main() {
                                 if cur_y < LIST_TOP {
                                     exit_armed = false;
 
-                                    if app_view == AppView::Library {
-                                        let page =
-                                            VISIBLE_ROWS.saturating_sub(1).max(1);
-                                        let max_scroll =
-                                            items.len().saturating_sub(VISIBLE_ROWS);
+                                    let page =
+                                        VISIBLE_ROWS.saturating_sub(1).max(1);
 
-                                        if cur_x < WIDTH as i32 - 120 {
-                                            scroll =
-                                                scroll.saturating_sub(page);
+                                    match app_view {
+                                        AppView::Library => {
+                                            let max_scroll = items
+                                                .len()
+                                                .saturating_sub(VISIBLE_ROWS);
+
+                                            if cur_x < WIDTH as i32 - 120 {
+                                                scroll =
+                                                    scroll.saturating_sub(page);
+                                            } else {
+                                                scroll = (scroll + page)
+                                                    .min(max_scroll);
+                                            }
+
+                                            dirty = true;
                                             eprintln!(
-                                                "[poc] header scroll up -> {scroll}"
-                                            );
-                                        } else {
-                                            scroll =
-                                                (scroll + page).min(max_scroll);
-                                            eprintln!(
-                                                "[poc] header scroll down -> {scroll}"
+                                                "[poc] liked scroll -> {scroll}"
                                             );
                                         }
+                                        AppView::Playlists => {
+                                            let max_scroll = playlists
+                                                .len()
+                                                .saturating_sub(VISIBLE_ROWS);
 
-                                        dirty = true;
+                                            if cur_x < WIDTH as i32 - 120 {
+                                                playlist_scroll =
+                                                    playlist_scroll
+                                                        .saturating_sub(page);
+                                            } else {
+                                                playlist_scroll =
+                                                    (playlist_scroll + page)
+                                                        .min(max_scroll);
+                                            }
+
+                                            dirty = true;
+                                            eprintln!(
+                                                "[poc] playlist scroll -> {}",
+                                                playlist_scroll
+                                            );
+                                        }
+                                        _ => {}
                                     }
                                 } else if cur_y >= TOOLBAR_TOP {
                                     let safe_x = cur_x.max(0).min(WIDTH as i32 - 1);
@@ -1821,6 +2060,7 @@ fn main() {
                                             exit_armed = false;
                                             app_view = match app_view {
                                                 AppView::Library => AppView::Menu,
+                                                AppView::Playlists => AppView::Menu,
                                                 AppView::Menu => AppView::Library,
                                                 AppView::Appearance => AppView::Menu,
                                                 AppView::Special => AppView::Appearance,
@@ -1883,7 +2123,13 @@ fn main() {
                                             }
                                         }
                                     }
-                                } else if app_view != AppView::Library {
+                                } else if matches!(
+                                    app_view,
+                                    AppView::Menu
+                                        | AppView::Appearance
+                                        | AppView::Special
+                                        | AppView::Diagnostics
+                                ) {
                                     exit_armed = false;
 
                                     let safe_x =
@@ -1898,7 +2144,8 @@ fn main() {
                                         AppView::Appearance => &APPEARANCE_LABELS,
                                         AppView::Special => &SPECIAL_LABELS,
                                         AppView::Diagnostics => &DIAGNOSTICS_LABELS,
-                                        AppView::Library => &MENU_LABELS,
+                                        AppView::Library
+                                        | AppView::Playlists => &MENU_LABELS,
                                     };
 
                                     if let Some(label) =
@@ -1907,6 +2154,35 @@ fn main() {
                                         match app_view {
                                             AppView::Menu => {
                                                 match menu_index {
+                                                    2 => {
+                                                        let fetched =
+                                                            daemon_playlist_query(
+                                                                "PLAYLISTS",
+                                                            );
+
+                                                        playlists =
+                                                            if fetched.is_empty() {
+                                                                vec![PlaylistItem {
+                                                                    id: String::new(),
+                                                                    name: "No playlists found"
+                                                                        .to_string(),
+                                                                    owner: String::new(),
+                                                                }]
+                                                            } else {
+                                                                fetched
+                                                            };
+
+                                                        playlist_scroll = 0;
+                                                        playlist_selected = None;
+                                                        app_view =
+                                                            AppView::Playlists;
+                                                        dirty = true;
+
+                                                        eprintln!(
+                                                            "[poc] loaded {} playlists",
+                                                            playlists.len()
+                                                        );
+                                                    }
                                                     3 => {
                                                         app_view =
                                                             AppView::Appearance;
@@ -2044,8 +2320,36 @@ fn main() {
                                                     );
                                                 }
                                             }
-                                            AppView::Library => {}
+                                            AppView::Library
+                                            | AppView::Playlists => {}
                                         }
+                                    }
+                                } else if app_view
+                                    == AppView::Playlists
+                                {
+                                    let rel = cur_y - LIST_TOP;
+                                    let visible_row =
+                                        (rel / ROW_HEIGHT) as usize;
+                                    let index =
+                                        playlist_scroll + visible_row;
+
+                                    if index < playlists.len() {
+                                        playlist_selected = Some(index);
+                                        exit_armed = false;
+
+                                        let playlist =
+                                            &playlists[index];
+
+                                        eprintln!(
+                                            "[poc] selected playlist {} ({})",
+                                            playlist.name,
+                                            playlist.id
+                                        );
+
+                                        // Selection only for this stage.
+                                        // Playlist IDs must never be sent as
+                                        // LOAD track commands.
+                                        dirty = true;
                                     }
                                 } else {
                                     let rel = cur_y - LIST_TOP;
@@ -2353,8 +2657,11 @@ BRIGHTNESS_LABELS[brightness_idx]
             draw_list(
                 &mut fb,
                 &items,
+                &playlists,
                 scroll,
+                playlist_scroll,
                 selected,
+                playlist_selected,
                 title,
                 battery_percent,
                 storage_free_mb,
