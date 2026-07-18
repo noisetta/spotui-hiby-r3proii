@@ -100,11 +100,14 @@ impl Framebuffer {
 
     fn flush(&mut self) -> std::io::Result<()> {
         use std::io::Seek;
+
         self.file.seek(std::io::SeekFrom::Start(0))?;
         self.file.write_all(&self.buf)?;
+
         // Pan the display to frame 0 (the buffer we just wrote), in case the
         // previous owner (hiby_player) left the view panned to frame 1.
         write_sysfs(FB_PAN_SYSFS, "0,0");
+
         Ok(())
     }
 
@@ -979,6 +982,129 @@ fn draw_volume_popup(
     fb.flush().ok();
 }
 
+/// Redraw only the 60-pixel current-track strip.
+fn draw_now_playing_strip(
+    fb: &mut Framebuffer,
+    now_playing: Option<&NowPlaying>,
+    playback_position: Option<u32>,
+    palette: &Palette,
+) {
+    let text_style =
+        MonoTextStyle::new(&FONT_9X15, palette.text);
+
+    // Dedicated current-track strip between the list and toolbar.
+    let now_playing_y = HEIGHT as i32 - 140;
+    Rectangle::new(
+        Point::new(0, now_playing_y),
+        Size::new(WIDTH as u32, 60),
+    )
+    .into_styled(PrimitiveStyle::with_fill(palette.now_playing))
+    .draw(fb)
+    .ok();
+
+    match now_playing {
+        Some(item) => {
+            let duration_ms = item.duration_ms;
+            let position_ms = playback_position.unwrap_or(0).min(duration_ms);
+            let time_label = format!(
+                "{} / {}",
+                format_playback_time(position_ms),
+                format_playback_time(duration_ms)
+            );
+            let time_width = time_label.chars().count() as i32 * 9;
+
+            let artist_available_width =
+                (WIDTH as i32 - 20 - time_width - 12).max(0);
+            let artist_max_chars = (artist_available_width / 9) as usize;
+
+            let now_title = truncate_label(&item.title, 50);
+            let artist_source = if item.artist.is_empty() {
+                "Unknown artist"
+            } else {
+                item.artist.as_str()
+            };
+            let now_artist =
+                truncate_label(artist_source, artist_max_chars);
+
+            let now_title_style =
+                MonoTextStyle::new(&FONT_9X15_BOLD, palette.text);
+
+            Text::with_baseline(
+                &now_title,
+                Point::new(10, now_playing_y + 3),
+                now_title_style,
+                Baseline::Top,
+            )
+            .draw(fb)
+            .ok();
+
+            Text::with_baseline(
+                &now_artist,
+                Point::new(10, now_playing_y + 21),
+                text_style,
+                Baseline::Top,
+            )
+            .draw(fb)
+            .ok();
+
+            Text::with_baseline(
+                &time_label,
+                Point::new(
+                    WIDTH as i32 - 10 - time_width,
+                    now_playing_y + 21,
+                ),
+                text_style,
+                Baseline::Top,
+            )
+            .draw(fb)
+            .ok();
+
+            let progress_x = 10;
+            let progress_y = now_playing_y + 53;
+            let progress_width = WIDTH as u32 - 20;
+
+            Rectangle::new(
+                Point::new(progress_x, progress_y),
+                Size::new(progress_width, 4),
+            )
+            .into_styled(PrimitiveStyle::with_fill(
+                palette.progress_track,
+            ))
+            .draw(fb)
+            .ok();
+
+            if duration_ms > 0 {
+                let filled_width = (
+                    position_ms as u64 * progress_width as u64
+                        / duration_ms as u64
+                ) as u32;
+
+                if filled_width > 0 {
+                    Rectangle::new(
+                        Point::new(progress_x, progress_y),
+                        Size::new(filled_width, 4),
+                    )
+                    .into_styled(PrimitiveStyle::with_fill(
+                        palette.progress_fill,
+                    ))
+                    .draw(fb)
+                    .ok();
+                }
+            }
+        }
+        None => {
+            Text::with_baseline(
+                "Nothing playing",
+                Point::new(10, now_playing_y + 22),
+                text_style,
+                Baseline::Top,
+            )
+            .draw(fb)
+            .ok();
+        }
+    }
+}
+
 /// Draw the track list with scrolling. `scroll` is the index of the first
 /// visible item; `selected` highlights one row (absolute index).
 fn draw_list(
@@ -1242,117 +1368,12 @@ fn draw_list(
         }
     }
 
-    // Dedicated current-track strip between the list and toolbar.
-    let now_playing_y = HEIGHT as i32 - 140;
-    Rectangle::new(
-        Point::new(0, now_playing_y),
-        Size::new(WIDTH as u32, 60),
-    )
-    .into_styled(PrimitiveStyle::with_fill(palette.now_playing))
-    .draw(fb)
-    .ok();
-
-    match now_playing {
-        Some(item) => {
-            let duration_ms = item.duration_ms;
-            let position_ms = playback_position.unwrap_or(0).min(duration_ms);
-            let time_label = format!(
-                "{} / {}",
-                format_playback_time(position_ms),
-                format_playback_time(duration_ms)
-            );
-            let time_width = time_label.chars().count() as i32 * 9;
-
-            let artist_available_width =
-                (WIDTH as i32 - 20 - time_width - 12).max(0);
-            let artist_max_chars = (artist_available_width / 9) as usize;
-
-            let now_title = truncate_label(&item.title, 50);
-            let artist_source = if item.artist.is_empty() {
-                "Unknown artist"
-            } else {
-                item.artist.as_str()
-            };
-            let now_artist =
-                truncate_label(artist_source, artist_max_chars);
-
-            let now_title_style =
-                MonoTextStyle::new(&FONT_9X15_BOLD, palette.text);
-
-            Text::with_baseline(
-                &now_title,
-                Point::new(10, now_playing_y + 3),
-                now_title_style,
-                Baseline::Top,
-            )
-            .draw(fb)
-            .ok();
-
-            Text::with_baseline(
-                &now_artist,
-                Point::new(10, now_playing_y + 21),
-                text_style,
-                Baseline::Top,
-            )
-            .draw(fb)
-            .ok();
-
-            Text::with_baseline(
-                &time_label,
-                Point::new(
-                    WIDTH as i32 - 10 - time_width,
-                    now_playing_y + 21,
-                ),
-                text_style,
-                Baseline::Top,
-            )
-            .draw(fb)
-            .ok();
-
-            let progress_x = 10;
-            let progress_y = now_playing_y + 53;
-            let progress_width = WIDTH as u32 - 20;
-
-            Rectangle::new(
-                Point::new(progress_x, progress_y),
-                Size::new(progress_width, 4),
-            )
-            .into_styled(PrimitiveStyle::with_fill(
-                palette.progress_track,
-            ))
-            .draw(fb)
-            .ok();
-
-            if duration_ms > 0 {
-                let filled_width = (
-                    position_ms as u64 * progress_width as u64
-                        / duration_ms as u64
-                ) as u32;
-
-                if filled_width > 0 {
-                    Rectangle::new(
-                        Point::new(progress_x, progress_y),
-                        Size::new(filled_width, 4),
-                    )
-                    .into_styled(PrimitiveStyle::with_fill(
-                        palette.progress_fill,
-                    ))
-                    .draw(fb)
-                    .ok();
-                }
-            }
-        }
-        None => {
-            Text::with_baseline(
-                "Nothing playing",
-                Point::new(10, now_playing_y + 22),
-                text_style,
-                Baseline::Top,
-            )
-            .draw(fb)
-            .ok();
-        }
-    }
+    draw_now_playing_strip(
+        fb,
+        now_playing,
+        playback_position,
+        palette,
+    );
 
     // Non-interactive separator immediately above the toolbar.
     let down_strip_y = HEIGHT as i32 - 80;
@@ -1696,6 +1717,7 @@ fn main() {
     let mut startup_brightness_applied = false;
     let mut volume_popup:
         Option<(u8, std::time::Instant)> = None;
+    let mut now_playing_dirty = false;
 
     loop {
         // Drain any available input events (non-blocking).
@@ -1852,7 +1874,7 @@ fn main() {
                                                 // actual position.
                                                 playback_position =
                                                     Some(target_ms);
-                                                dirty = true;
+                                                now_playing_dirty = true;
 
                                                 eprintln!(
                                                     "[poc] progress seek -> {} ms",
@@ -2082,7 +2104,7 @@ fn main() {
                                             percent,
                                             std::time::Instant::now(),
                                         ));
-                                        dirty = true;
+                                        now_playing_dirty = true;
                                         eprintln!(
                                             "[poc] volume up -> {}%",
                                             percent
@@ -2106,7 +2128,7 @@ fn main() {
                                             percent,
                                             std::time::Instant::now(),
                                         ));
-                                        dirty = true;
+                                        now_playing_dirty = true;
                                         eprintln!(
                                             "[poc] volume down -> {}%",
                                             percent
@@ -2172,7 +2194,7 @@ BRIGHTNESS_LABELS[brightness_idx]
             if let Some(updated_now_playing) = daemon_now_playing() {
                 if updated_now_playing != now_playing {
                     now_playing = updated_now_playing;
-                    dirty = true;
+                    now_playing_dirty = true;
 
                     match now_playing.as_ref() {
                         Some(item) => eprintln!(
@@ -2195,7 +2217,7 @@ BRIGHTNESS_LABELS[brightness_idx]
                     };
 
                     playback_position = updated_position;
-                    dirty = true;
+                    now_playing_dirty = true;
 
                     if should_log {
                         match playback_position {
@@ -2266,13 +2288,13 @@ BRIGHTNESS_LABELS[brightness_idx]
 
         if volume_popup_expired {
             volume_popup = None;
-            dirty = true;
+            now_playing_dirty = true;
         }
 
-        // Re-check the output jack roughly once a second. Removing an active
-        // output pauses playback. Connecting a jack selects its route but does
-        // not resume automatically, preventing unexpected audio output.
-        if last_jack_check.elapsed().as_millis() >= 1000 {
+        // Re-check the output jack four times per second. Removing an active
+        // output immediately requests a pause. Connecting a jack selects its
+        // route but does not resume automatically.
+        if last_jack_check.elapsed().as_millis() >= 250 {
             last_jack_check = std::time::Instant::now();
 
             let detected = if switch_active(SW_BALANCE) {
@@ -2285,18 +2307,24 @@ BRIGHTNESS_LABELS[brightness_idx]
 
             if detected != last_port {
                 let previous_port = last_port;
-                let current_state =
-                    daemon_playback_state().unwrap_or(playback_state);
 
-                if previous_port.is_some()
-                    && current_state == PlaybackState::Playing
-                {
+                if previous_port.is_some() {
+                    // PAUSE is safe to request even if the cached UI state is
+                    // slightly stale or playback is already paused.
                     daemon_send("PAUSE");
-                    playback_state = PlaybackState::Paused;
-                    dirty = true;
+
+                    if matches!(
+                        playback_state,
+                        PlaybackState::Unknown
+                            | PlaybackState::Loading
+                            | PlaybackState::Playing
+                    ) {
+                        playback_state = PlaybackState::Paused;
+                        dirty = true;
+                    }
 
                     eprintln!(
-                        "[poc] jack removed or switched -> paused playback"
+                        "[poc] jack removed or switched -> pause requested"
                     );
                 }
 
@@ -2319,9 +2347,8 @@ BRIGHTNESS_LABELS[brightness_idx]
             }
         }
 
-        // Re-render only when visible UI state changes. During playback,
-        // position updates intentionally redraw the progress display about once
-        // per second. The keepalive path remains cheaper while idle or paused.
+        // Re-render the whole interface only when global state changes.
+        // Position and volume updates redraw just the 60-pixel track strip.
         if dirty {
             draw_list(
                 &mut fb,
@@ -2350,8 +2377,29 @@ BRIGHTNESS_LABELS[brightness_idx]
                 );
             }
 
+            now_playing_dirty = false;
             last_flush = std::time::Instant::now();
             dirty = false;
+        } else if now_playing_dirty {
+            draw_now_playing_strip(
+                &mut fb,
+                now_playing.as_ref(),
+                playback_position,
+                &palette,
+            );
+
+            if let Some((percent, _)) = volume_popup.as_ref() {
+                draw_volume_popup(
+                    &mut fb,
+                    *percent,
+                    &palette,
+                );
+            } else {
+                fb.flush().ok();
+            }
+
+            now_playing_dirty = false;
+            last_flush = std::time::Instant::now();
         } else if last_flush.elapsed().as_millis() as u64 >= keepalive_ms {
             // Keep the panel lit between changes with a periodic flush.
             fb.keepalive();
