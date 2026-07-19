@@ -289,6 +289,55 @@ enum PlaybackState {
     Error,
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum RepeatMode {
+    Off,
+    All,
+    One,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct PlaybackModes {
+    shuffle: bool,
+    repeat: RepeatMode,
+}
+
+impl Default for PlaybackModes {
+    fn default() -> Self {
+        Self {
+            shuffle: false,
+            repeat: RepeatMode::Off,
+        }
+    }
+}
+
+fn daemon_playback_modes() -> Option<PlaybackModes> {
+    let reply = daemon_request("PLAYBACK_MODES")?;
+    let fields: Vec<&str> = reply.split_whitespace().collect();
+
+    if fields.len() != 5
+        || fields[0] != "MODES"
+        || fields[1] != "SHUFFLE"
+        || fields[3] != "REPEAT"
+    {
+        return None;
+    }
+
+    let shuffle = match fields[2] {
+        "ON" => true,
+        "OFF" => false,
+        _ => return None,
+    };
+    let repeat = match fields[4] {
+        "OFF" => RepeatMode::Off,
+        "ALL" => RepeatMode::All,
+        "ONE" => RepeatMode::One,
+        _ => return None,
+    };
+
+    Some(PlaybackModes { shuffle, repeat })
+}
+
 impl PlaybackState {
     fn from_status_reply(reply: &str) -> Option<Self> {
         match reply {
@@ -820,6 +869,7 @@ enum AppView {
     SearchInput,
     SearchResults,
     Menu,
+    Sound,
     Appearance,
     Special,
     Diagnostics,
@@ -901,6 +951,15 @@ const MENU_LABELS: [&str; 6] = [
     "Appearance",
     "Device",
     "Diagnostics",
+];
+
+const SOUND_LABELS: [&str; 6] = [
+    "Shuffle",
+    "Repeat Off",
+    "Repeat All",
+    "Repeat One",
+    "Scope: All",
+    "Back",
 ];
 
 const SEARCH_KEY_ROWS: [&str; 3] = [
@@ -1668,6 +1727,7 @@ fn draw_list(
     memory_available_mb: Option<u64>,
     brightness_idx: usize,
     playback_state: PlaybackState,
+    playback_modes: PlaybackModes,
     now_playing: Option<&NowPlaying>,
     playback_position: Option<u32>,
     palette: &Palette,
@@ -1717,6 +1777,7 @@ fn draw_list(
         AppView::SearchInput => "Search",
         AppView::SearchResults => "Search Results",
         AppView::Menu => "More",
+        AppView::Sound => "Sound",
         AppView::Appearance => "Appearance",
         AppView::Special => "Appearance 2",
         AppView::Diagnostics => "Diagnostics",
@@ -2162,6 +2223,7 @@ fn draw_list(
         | AppView::SearchInput
         | AppView::SearchResults => None,
         AppView::Menu => Some(&MENU_LABELS),
+        AppView::Sound => Some(&SOUND_LABELS),
         AppView::Appearance => Some(&APPEARANCE_LABELS),
         AppView::Special => Some(&SPECIAL_LABELS),
         AppView::Diagnostics => Some(&DIAGNOSTICS_LABELS),
@@ -2226,6 +2288,13 @@ fn draw_list(
                     4 => active_theme == Theme::NightMarket,
                     _ => false,
                 },
+                AppView::Sound => match index {
+                    0 => playback_modes.shuffle,
+                    1 => playback_modes.repeat == RepeatMode::Off,
+                    2 => playback_modes.repeat == RepeatMode::All,
+                    3 => playback_modes.repeat == RepeatMode::One,
+                    _ => false,
+                },
                 AppView::Library
                 | AppView::Playlists
                 | AppView::PlaylistTracks
@@ -2236,7 +2305,12 @@ fn draw_list(
             };
 
             let display_label =
-                if app_view == AppView::Diagnostics {
+                if app_view == AppView::Sound && index == 0 {
+                    format!(
+                        "Shuffle: {}",
+                        if playback_modes.shuffle { "On" } else { "Off" }
+                    )
+                } else if app_view == AppView::Diagnostics {
                     match index {
                         0 => {
                             let daemon_status = match playback_state {
@@ -2330,6 +2404,7 @@ fn draw_list(
         | AppView::SearchInput
         | AppView::SearchResults => "Back",
         AppView::Menu
+        | AppView::Sound
         | AppView::Appearance
         | AppView::Special
         | AppView::Diagnostics => "Back",
@@ -2548,6 +2623,8 @@ fn main() {
         .unwrap_or(1);
     let mut scroll: usize = 0;
     let mut playback_state = PlaybackState::Unknown;
+    let mut playback_modes =
+        daemon_playback_modes().unwrap_or_default();
     let mut now_playing: Option<NowPlaying> = None;
     let mut playback_position: Option<u32> = None;
     let mut theme = load_theme();
@@ -2582,6 +2659,7 @@ fn main() {
         memory_available_mb,
         brightness_idx,
         playback_state,
+        playback_modes,
         now_playing.as_ref(),
         playback_position,
         &palette,
@@ -2853,6 +2931,7 @@ fn main() {
                                                     AppView::SearchInput
                                                 }
                                                 AppView::Menu => AppView::Library,
+                                                AppView::Sound => AppView::Menu,
                                                 AppView::Appearance => AppView::Menu,
                                                 AppView::Special => AppView::Appearance,
                                                 AppView::Diagnostics => AppView::Menu,
@@ -3029,6 +3108,7 @@ fn main() {
                                 } else if matches!(
                                     app_view,
                                     AppView::Menu
+                                        | AppView::Sound
                                         | AppView::Appearance
                                         | AppView::Special
                                         | AppView::Diagnostics
@@ -3044,6 +3124,7 @@ fn main() {
 
                                     let menu_labels = match app_view {
                                         AppView::Menu => &MENU_LABELS,
+                                        AppView::Sound => &SOUND_LABELS,
                                         AppView::Appearance => &APPEARANCE_LABELS,
                                         AppView::Special => &SPECIAL_LABELS,
                                         AppView::Diagnostics => &DIAGNOSTICS_LABELS,
@@ -3096,6 +3177,19 @@ fn main() {
                                                         eprintln!(
                                                             "[poc] loaded {} playlists",
                                                             playlists.len()
+                                                        );
+                                                    }
+                                                    1 => {
+                                                        if let Some(updated) =
+                                                            daemon_playback_modes()
+                                                        {
+                                                            playback_modes = updated;
+                                                        }
+                                                        app_view = AppView::Sound;
+                                                        dirty = true;
+                                                        eprintln!(
+                                                            "[poc] app view -> {:?}",
+                                                            app_view
                                                         );
                                                     }
                                                     3 => {
@@ -3165,6 +3259,52 @@ fn main() {
                                                             "[poc] theme -> {}",
                                                             label
                                                         );
+                                                    }
+                                                }
+                                            }
+                                            AppView::Sound => {
+                                                let command = match menu_index {
+                                                    0 => Some(format!(
+                                                        "SET_SHUFFLE {}",
+                                                        if playback_modes.shuffle {
+                                                            "OFF"
+                                                        } else {
+                                                            "ON"
+                                                        }
+                                                    )),
+                                                    1 => Some(
+                                                        "SET_REPEAT OFF".to_string(),
+                                                    ),
+                                                    2 => Some(
+                                                        "SET_REPEAT ALL".to_string(),
+                                                    ),
+                                                    3 => Some(
+                                                        "SET_REPEAT ONE".to_string(),
+                                                    ),
+                                                    _ => None,
+                                                };
+
+                                                if menu_index == 5 {
+                                                    app_view = AppView::Menu;
+                                                    dirty = true;
+                                                } else if let Some(command) = command {
+                                                    if daemon_request(&command)
+                                                        .map(|reply| {
+                                                            reply.starts_with("OK ")
+                                                        })
+                                                        .unwrap_or(false)
+                                                    {
+                                                        if let Some(updated) =
+                                                            daemon_playback_modes()
+                                                        {
+                                                            playback_modes = updated;
+                                                            dirty = true;
+                                                            eprintln!(
+                                                                "[poc] playback modes -> shuffle={} repeat={:?}",
+                                                                playback_modes.shuffle,
+                                                                playback_modes.repeat
+                                                            );
+                                                        }
                                                     }
                                                 }
                                             }
@@ -4080,6 +4220,7 @@ BRIGHTNESS_LABELS[brightness_idx]
                 memory_available_mb,
                 brightness_idx,
                 playback_state,
+                playback_modes,
                 now_playing.as_ref(),
                 playback_position,
                 &palette,

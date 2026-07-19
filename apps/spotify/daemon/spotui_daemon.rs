@@ -21,6 +21,9 @@
 //   STOP                     -> stop
 //   STATUS                   -> report current playback state
 //   QUEUE_STATUS             -> report the active queue position
+//   PLAYBACK_MODES           -> report shuffle and repeat modes
+//   SET_SHUFFLE <ON|OFF>     -> persist and apply shuffle mode
+//   SET_REPEAT <OFF|ALL|ONE> -> persist and apply repeat mode
 //   NOW_PLAYING              -> report current track metadata
 //   POSITION                 -> report playback position in milliseconds
 //   SEEK <milliseconds>      -> seek within the loaded track
@@ -63,6 +66,7 @@ const TCP_ADDR: &str = "127.0.0.1:5599";
 // removable SD card), so auth works even when no SD card is inserted -- e.g.
 // right after a firmware flash, where the SD is removed before reboot.
 const CACHE_DIR: &str = "/usr/data/librespot-cache";
+const PLAYBACK_MODES_PATH: &str = "/usr/data/spotui_playback_modes";
 
 struct NowPlaying {
     id: String,
@@ -77,12 +81,107 @@ enum QueueSource {
     Search,
 }
 
-#[derive(Default)]
 struct PlaybackQueue {
     source: Option<QueueSource>,
     track_ids: Vec<String>,
     current_index: Option<usize>,
+    play_order: Vec<usize>,
+    order_position: Option<usize>,
     request_id: u64,
+}
+
+impl Default for PlaybackQueue {
+    fn default() -> Self {
+        Self {
+            source: None,
+            track_ids: Vec::new(),
+            current_index: None,
+            play_order: Vec::new(),
+            order_position: None,
+            request_id: 0,
+        }
+    }
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum RepeatMode {
+    Off,
+    All,
+    One,
+}
+
+impl RepeatMode {
+    fn key(self) -> &'static str {
+        match self {
+            Self::Off => "off",
+            Self::All => "all",
+            Self::One => "one",
+        }
+    }
+}
+
+struct PlaybackModes {
+    shuffle: bool,
+    repeat: RepeatMode,
+    shuffle_seed: u64,
+}
+
+fn load_playback_modes() -> PlaybackModes {
+    let contents = std::fs::read_to_string(PLAYBACK_MODES_PATH)
+        .unwrap_or_default();
+    let shuffle = contents.lines().any(|line| line == "shuffle=on");
+    let repeat = if contents.lines().any(|line| line == "repeat=all") {
+        RepeatMode::All
+    } else if contents.lines().any(|line| line == "repeat=one") {
+        RepeatMode::One
+    } else {
+        RepeatMode::Off
+    };
+
+    PlaybackModes {
+        shuffle,
+        repeat,
+        shuffle_seed: 0x5f37_59df_c2b1_4a6d,
+    }
+}
+
+fn save_playback_modes(modes: &PlaybackModes) -> std::io::Result<()> {
+    std::fs::write(
+        PLAYBACK_MODES_PATH,
+        format!(
+            "shuffle={}\nrepeat={}\n",
+            if modes.shuffle { "on" } else { "off" },
+            modes.repeat.key()
+        ),
+    )
+}
+
+fn next_random(seed: &mut u64) -> u64 {
+    *seed ^= *seed << 13;
+    *seed ^= *seed >> 7;
+    *seed ^= *seed << 17;
+    *seed
+}
+
+fn make_play_order(
+    len: usize,
+    selected_index: usize,
+    shuffle: bool,
+    seed: &mut u64,
+) -> Vec<usize> {
+    let mut order: Vec<usize> = (0..len)
+        .filter(|index| *index != selected_index)
+        .collect();
+
+    if shuffle {
+        for index in (1..order.len()).rev() {
+            let swap_index = (next_random(seed) as usize) % (index + 1);
+            order.swap(index, swap_index);
+        }
+    }
+
+    order.insert(0, selected_index);
+    order
 }
 
 #[derive(Default)]
@@ -198,6 +297,7 @@ async fn main() {
     let playback_position = Arc::new(RwLock::new(None::<u32>));
     let playback_queue =
         Arc::new(RwLock::new(PlaybackQueue::default()));
+    let playback_modes = Arc::new(RwLock::new(load_playback_modes()));
     let browse_cache =
         Arc::new(RwLock::new(BrowseCache::default()));
     let load_mutex = Arc::new(Mutex::new(()));
@@ -207,6 +307,7 @@ async fn main() {
     let event_now_playing = now_playing.clone();
     let event_position = playback_position.clone();
     let event_playback_queue = playback_queue.clone();
+    let event_playback_modes = playback_modes.clone();
     let mut player_events = player.get_player_event_channel();
 
     tokio::spawn(async move {
@@ -214,6 +315,7 @@ async fn main() {
             if let PlayerEvent::EndOfTrack { track_id, .. } = &event {
                 let ended_id = spotify_track_base62(track_id);
                 let mut next_track = None;
+                let repeat_mode = event_playback_modes.read().await.repeat;
 
                 {
                     let mut queue = event_playback_queue.write().await;
@@ -241,13 +343,38 @@ async fn main() {
                             == Some(ended_id);
 
                         if current_matches {
-                            let next_index = current_index + 1;
-                            let next_id =
-                                queue.track_ids.get(next_index).cloned();
+                            let next_order_position = if repeat_mode
+                                == RepeatMode::One
+                            {
+                                queue.order_position
+                            } else {
+                                queue.order_position.and_then(|position| {
+                                    let next = position + 1;
+                                    if next < queue.play_order.len() {
+                                        Some(next)
+                                    } else if repeat_mode == RepeatMode::All
+                                        && !queue.play_order.is_empty()
+                                    {
+                                        Some(0)
+                                    } else {
+                                        None
+                                    }
+                                })
+                            };
+                            let next_index = next_order_position.and_then(
+                                |position| queue.play_order.get(position).copied(),
+                            );
+                            let next_id = next_index.and_then(|index| {
+                                queue.track_ids.get(index).cloned()
+                            });
 
-                            if let Some(next_id) = next_id {
+                            if let (Some(next_id), Some(next_index), Some(next_order_position)) =
+                                (next_id, next_index, next_order_position)
+                            {
                                 let queue_len = queue.track_ids.len();
                                 queue.current_index = Some(next_index);
+                                queue.order_position =
+                                    Some(next_order_position);
                                 next_track = Some((
                                     source_label,
                                     next_index,
@@ -437,6 +564,7 @@ async fn main() {
     let unix_now_playing = now_playing.clone();
     let unix_playback_position = playback_position.clone();
     let unix_playback_queue = playback_queue.clone();
+    let unix_playback_modes = playback_modes.clone();
     let unix_browse_cache = browse_cache.clone();
     let unix_load_mutex = load_mutex.clone();
     let unix_latest_load_request = latest_load_request.clone();
@@ -451,6 +579,7 @@ async fn main() {
                     let now_playing = unix_now_playing.clone();
                     let playback_position = unix_playback_position.clone();
                     let playback_queue = unix_playback_queue.clone();
+                    let playback_modes = unix_playback_modes.clone();
                     let browse_cache = unix_browse_cache.clone();
                     let load_mutex = unix_load_mutex.clone();
                     let latest_load_request =
@@ -467,6 +596,7 @@ async fn main() {
                             now_playing,
                             playback_position,
                             playback_queue,
+                            playback_modes,
                             browse_cache,
                             load_mutex,
                             latest_load_request,
@@ -486,6 +616,7 @@ async fn main() {
     let tcp_now_playing = now_playing.clone();
     let tcp_playback_position = playback_position.clone();
     let tcp_playback_queue = playback_queue.clone();
+    let tcp_playback_modes = playback_modes.clone();
     let tcp_browse_cache = browse_cache.clone();
     let tcp_load_mutex = load_mutex.clone();
     let tcp_latest_load_request = latest_load_request.clone();
@@ -500,6 +631,7 @@ async fn main() {
                     let now_playing = tcp_now_playing.clone();
                     let playback_position = tcp_playback_position.clone();
                     let playback_queue = tcp_playback_queue.clone();
+                    let playback_modes = tcp_playback_modes.clone();
                     let browse_cache = tcp_browse_cache.clone();
                     let load_mutex = tcp_load_mutex.clone();
                     let latest_load_request =
@@ -516,6 +648,7 @@ async fn main() {
                             now_playing,
                             playback_position,
                             playback_queue,
+                            playback_modes,
                             browse_cache,
                             load_mutex,
                             latest_load_request,
@@ -545,6 +678,7 @@ async fn handle_conn<R, W>(
     now_playing: Arc<RwLock<Option<NowPlaying>>>,
     playback_position: Arc<RwLock<Option<u32>>>,
     playback_queue: Arc<RwLock<PlaybackQueue>>,
+    playback_modes: Arc<RwLock<PlaybackModes>>,
     browse_cache: Arc<RwLock<BrowseCache>>,
     load_mutex: Arc<Mutex<()>>,
     latest_load_request: Arc<RwLock<u64>>,
@@ -649,6 +783,17 @@ async fn handle_conn<R, W>(
                                     Ok(id) => {
                                         let queue_len =
                                             track_ids.len();
+                                        let play_order = {
+                                            let mut modes =
+                                                playback_modes.write().await;
+                                            let shuffle = modes.shuffle;
+                                            make_play_order(
+                                                queue_len,
+                                                index,
+                                                shuffle,
+                                                &mut modes.shuffle_seed,
+                                            )
+                                        };
                                         *playback_queue.write().await =
                                             PlaybackQueue {
                                                 source: Some(
@@ -657,6 +802,8 @@ async fn handle_conn<R, W>(
                                                 track_ids,
                                                 current_index:
                                                     Some(index),
+                                                play_order,
+                                                order_position: Some(0),
                                                 request_id,
                                             };
                                         player.load(
@@ -786,6 +933,18 @@ async fn handle_conn<R, W>(
                                         Ok(id) => {
                                             let queue_len =
                                                 track_ids.len();
+                                            let play_order = {
+                                                let mut modes = playback_modes
+                                                    .write()
+                                                    .await;
+                                                let shuffle = modes.shuffle;
+                                                make_play_order(
+                                                    queue_len,
+                                                    index,
+                                                    shuffle,
+                                                    &mut modes.shuffle_seed,
+                                                )
+                                            };
                                             *playback_queue.write().await =
                                                 PlaybackQueue {
                                                     source: Some(
@@ -797,6 +956,8 @@ async fn handle_conn<R, W>(
                                                     track_ids,
                                                     current_index:
                                                         Some(index),
+                                                    play_order,
+                                                    order_position: Some(0),
                                                     request_id,
                                                 };
                                             player.load(
@@ -912,6 +1073,18 @@ async fn handle_conn<R, W>(
                                     match SpotifyId::from_base62(track_id) {
                                         Ok(id) => {
                                             let queue_len = track_ids.len();
+                                            let play_order = {
+                                                let mut modes = playback_modes
+                                                    .write()
+                                                    .await;
+                                                let shuffle = modes.shuffle;
+                                                make_play_order(
+                                                    queue_len,
+                                                    index,
+                                                    shuffle,
+                                                    &mut modes.shuffle_seed,
+                                                )
+                                            };
                                             *playback_queue.write().await =
                                                 PlaybackQueue {
                                                     source: Some(
@@ -920,6 +1093,8 @@ async fn handle_conn<R, W>(
                                                     track_ids,
                                                     current_index:
                                                         Some(index),
+                                                    play_order,
+                                                    order_position: Some(0),
                                                     request_id,
                                                 };
                                             player.load(
@@ -964,6 +1139,76 @@ async fn handle_conn<R, W>(
                     PlaybackQueue::default();
                 player.stop();
                 "OK stop\n".to_string()
+            }
+            "PLAYBACK_MODES" => {
+                let modes = playback_modes.read().await;
+                format!(
+                    "MODES SHUFFLE {} REPEAT {}\n",
+                    if modes.shuffle { "ON" } else { "OFF" },
+                    modes.repeat.key().to_uppercase()
+                )
+            }
+            "SET_SHUFFLE" => {
+                let enabled = match arg.to_uppercase().as_str() {
+                    "ON" => Some(true),
+                    "OFF" => Some(false),
+                    _ => None,
+                };
+
+                match enabled {
+                    Some(enabled) => {
+                        let mut modes = playback_modes.write().await;
+                        modes.shuffle = enabled;
+
+                        let mut queue = playback_queue.write().await;
+                        if let Some(current_index) = queue.current_index {
+                            queue.play_order = make_play_order(
+                                queue.track_ids.len(),
+                                current_index,
+                                enabled,
+                                &mut modes.shuffle_seed,
+                            );
+                            queue.order_position = Some(0);
+                        }
+
+                        if let Err(error) = save_playback_modes(&modes) {
+                            eprintln!(
+                                "[spotui] failed to save playback modes: {}",
+                                error
+                            );
+                        }
+                        format!(
+                            "OK shuffle {}\n",
+                            if enabled { "on" } else { "off" }
+                        )
+                    }
+                    None => "ERR SET_SHUFFLE needs ON or OFF\n".to_string(),
+                }
+            }
+            "SET_REPEAT" => {
+                let updated = match arg.to_uppercase().as_str() {
+                    "OFF" => Some(RepeatMode::Off),
+                    "ALL" => Some(RepeatMode::All),
+                    "ONE" => Some(RepeatMode::One),
+                    _ => None,
+                };
+
+                match updated {
+                    Some(updated) => {
+                        let mut modes = playback_modes.write().await;
+                        modes.repeat = updated;
+                        if let Err(error) = save_playback_modes(&modes) {
+                            eprintln!(
+                                "[spotui] failed to save playback modes: {}",
+                                error
+                            );
+                        }
+                        format!("OK repeat {}\n", updated.key())
+                    }
+                    None => {
+                        "ERR SET_REPEAT needs OFF, ALL, or ONE\n".to_string()
+                    }
+                }
             }
             "STATUS" => {
                 let state = *playback_state.read().await;
