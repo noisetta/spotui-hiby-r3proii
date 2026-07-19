@@ -19,6 +19,8 @@
 //   PLAY                     -> resume
 //   PAUSE                    -> pause
 //   STOP                     -> stop
+//   NEXT                     -> manually advance in the active queue
+//   PREVIOUS                 -> manually go back in the active queue
 //   STATUS                   -> report current playback state
 //   QUEUE_STATUS             -> report the active queue position
 //   PLAYBACK_MODES           -> report shuffle and repeat modes
@@ -169,15 +171,17 @@ fn make_play_order(
     shuffle: bool,
     seed: &mut u64,
 ) -> Vec<usize> {
+    if !shuffle {
+        return (0..len).collect();
+    }
+
     let mut order: Vec<usize> = (0..len)
         .filter(|index| *index != selected_index)
         .collect();
 
-    if shuffle {
-        for index in (1..order.len()).rev() {
-            let swap_index = (next_random(seed) as usize) % (index + 1);
-            order.swap(index, swap_index);
-        }
+    for index in (1..order.len()).rev() {
+        let swap_index = (next_random(seed) as usize) % (index + 1);
+        order.swap(index, swap_index);
     }
 
     order.insert(0, selected_index);
@@ -794,6 +798,10 @@ async fn handle_conn<R, W>(
                                                 &mut modes.shuffle_seed,
                                             )
                                         };
+                                        let order_position = play_order
+                                            .iter()
+                                            .position(|queued| *queued == index)
+                                            .unwrap_or(0);
                                         *playback_queue.write().await =
                                             PlaybackQueue {
                                                 source: Some(
@@ -803,7 +811,8 @@ async fn handle_conn<R, W>(
                                                 current_index:
                                                     Some(index),
                                                 play_order,
-                                                order_position: Some(0),
+                                                order_position:
+                                                    Some(order_position),
                                                 request_id,
                                             };
                                         player.load(
@@ -945,6 +954,10 @@ async fn handle_conn<R, W>(
                                                     &mut modes.shuffle_seed,
                                                 )
                                             };
+                                            let order_position = play_order
+                                                .iter()
+                                                .position(|queued| *queued == index)
+                                                .unwrap_or(0);
                                             *playback_queue.write().await =
                                                 PlaybackQueue {
                                                     source: Some(
@@ -957,7 +970,8 @@ async fn handle_conn<R, W>(
                                                     current_index:
                                                         Some(index),
                                                     play_order,
-                                                    order_position: Some(0),
+                                                    order_position:
+                                                        Some(order_position),
                                                     request_id,
                                                 };
                                             player.load(
@@ -1085,6 +1099,10 @@ async fn handle_conn<R, W>(
                                                     &mut modes.shuffle_seed,
                                                 )
                                             };
+                                            let order_position = play_order
+                                                .iter()
+                                                .position(|queued| *queued == index)
+                                                .unwrap_or(0);
                                             *playback_queue.write().await =
                                                 PlaybackQueue {
                                                     source: Some(
@@ -1094,7 +1112,8 @@ async fn handle_conn<R, W>(
                                                     current_index:
                                                         Some(index),
                                                     play_order,
-                                                    order_position: Some(0),
+                                                    order_position:
+                                                        Some(order_position),
                                                     request_id,
                                                 };
                                             player.load(
@@ -1140,6 +1159,78 @@ async fn handle_conn<R, W>(
                 player.stop();
                 "OK stop\n".to_string()
             }
+            "NEXT" | "PREVIOUS" => {
+                let forward = cmd == "NEXT";
+                let repeat_mode = playback_modes.read().await.repeat;
+                let mut queue = playback_queue.write().await;
+
+                let target_position = queue.order_position.and_then(|position| {
+                    if forward {
+                        let next = position + 1;
+                        if next < queue.play_order.len() {
+                            Some(next)
+                        } else if repeat_mode == RepeatMode::All
+                            && !queue.play_order.is_empty()
+                        {
+                            Some(0)
+                        } else {
+                            None
+                        }
+                    } else if position > 0 {
+                        Some(position - 1)
+                    } else if repeat_mode == RepeatMode::All
+                        && !queue.play_order.is_empty()
+                    {
+                        Some(queue.play_order.len() - 1)
+                    } else {
+                        None
+                    }
+                });
+
+                match target_position.and_then(|position| {
+                    queue.play_order.get(position).copied().map(|index| {
+                        (position, index)
+                    })
+                }) {
+                    Some((position, index)) => {
+                        match queue.track_ids.get(index).cloned() {
+                            Some(track_id) => {
+                                match SpotifyId::from_base62(&track_id) {
+                                    Ok(id) => {
+                                        queue.current_index = Some(index);
+                                        queue.order_position = Some(position);
+                                        let queue_len = queue.track_ids.len();
+                                        player.load(
+                                            SpotifyUri::Track { id },
+                                            true,
+                                            0,
+                                        );
+                                        eprintln!(
+                                            "[spotui] manual {} -> {}/{} ({})",
+                                            if forward { "next" } else { "previous" },
+                                            position + 1,
+                                            queue_len,
+                                            track_id
+                                        );
+                                        format!(
+                                            "OK loading {} {} {}\n",
+                                            if forward { "next" } else { "previous" },
+                                            index,
+                                            track_id
+                                        )
+                                    }
+                                    Err(error) => format!(
+                                        "ERR bad queued track id '{}': {}\n",
+                                        track_id, error
+                                    ),
+                                }
+                            }
+                            None => "ERR queue index unavailable\n".to_string(),
+                        }
+                    }
+                    None => "OK queue boundary\n".to_string(),
+                }
+            }
             "PLAYBACK_MODES" => {
                 let modes = playback_modes.read().await;
                 format!(
@@ -1168,7 +1259,10 @@ async fn handle_conn<R, W>(
                                 enabled,
                                 &mut modes.shuffle_seed,
                             );
-                            queue.order_position = Some(0);
+                            queue.order_position = queue
+                                .play_order
+                                .iter()
+                                .position(|queued| *queued == current_index);
                         }
 
                         if let Err(error) = save_playback_modes(&modes) {

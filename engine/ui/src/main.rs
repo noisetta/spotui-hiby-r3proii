@@ -1616,7 +1616,7 @@ fn draw_now_playing_strip(
                 (WIDTH as i32 - 20 - time_width - 12).max(0);
             let artist_max_chars = (artist_available_width / 9) as usize;
 
-            let now_title = truncate_label(&item.title, 50);
+            let now_title = truncate_label(&item.title, 43);
             let artist_source = if item.artist.is_empty() {
                 "Unknown artist"
             } else {
@@ -1629,8 +1629,26 @@ fn draw_now_playing_strip(
                 MonoTextStyle::new(&FONT_9X15_BOLD, palette.text);
 
             Text::with_baseline(
+                "<|",
+                Point::new(8, now_playing_y + 3),
+                now_title_style,
+                Baseline::Top,
+            )
+            .draw(fb)
+            .ok();
+
+            Text::with_baseline(
+                "|>",
+                Point::new(452, now_playing_y + 3),
+                now_title_style,
+                Baseline::Top,
+            )
+            .draw(fb)
+            .ok();
+
+            Text::with_baseline(
                 &now_title,
-                Point::new(10, now_playing_y + 3),
+                Point::new(38, now_playing_y + 3),
                 now_title_style,
                 Baseline::Top,
             )
@@ -2948,12 +2966,36 @@ fn main() {
                                     // Separator area intentionally does nothing.
                                     exit_armed = false;
                                 } else if cur_y >= NOW_PLAYING_TOP {
-                                    // Only the lower part of the now-playing
-                                    // strip acts as the progress-bar seek area.
-                                    // Other taps in this strip do nothing.
                                     exit_armed = false;
 
-                                    if cur_y >= SEEK_HIT_TOP
+                                    if cur_y < SEEK_HIT_TOP
+                                        && now_playing.is_some()
+                                        && (cur_x < 80 || cur_x >= 400)
+                                    {
+                                        let command =
+                                            if cur_x < 80 { "PREVIOUS" } else { "NEXT" };
+                                        let loaded = daemon_request(command)
+                                            .map(|reply| {
+                                                reply.starts_with("OK loading ")
+                                            })
+                                            .unwrap_or(false);
+
+                                        if loaded {
+                                            playback_state =
+                                                PlaybackState::Loading;
+                                            playback_position = Some(0);
+                                            dirty = true;
+                                            eprintln!(
+                                                "[poc] now-playing {} requested",
+                                                command.to_lowercase()
+                                            );
+                                        } else {
+                                            eprintln!(
+                                                "[poc] now-playing {} reached queue boundary",
+                                                command.to_lowercase()
+                                            );
+                                        }
+                                    } else if cur_y >= SEEK_HIT_TOP
                                         && cur_x >= PROGRESS_LEFT
                                         && cur_x <= PROGRESS_RIGHT
                                     {
