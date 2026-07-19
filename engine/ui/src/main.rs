@@ -327,6 +327,7 @@ enum QueueSource {
 #[derive(Clone, Debug, PartialEq, Eq)]
 struct QueueStatus {
     source: QueueSource,
+    request_id: u64,
     index: usize,
     length: usize,
     track_id: String,
@@ -335,6 +336,13 @@ struct QueueStatus {
 struct PendingQueueSelection {
     source: QueueSource,
     track_id: String,
+    request_id: u64,
+    started: std::time::Instant,
+}
+
+struct PendingLoadCommand {
+    request_id: u64,
+    command: String,
     started: std::time::Instant,
 }
 
@@ -349,13 +357,17 @@ fn daemon_queue_status() -> Option<Option<QueueStatus>> {
         return Some(None);
     }
 
-    let (source, rest) =
+    let (request_id, source, rest) =
         if let Some(rest) = reply.strip_prefix("QUEUE LIKED ") {
-            (QueueSource::Liked, rest)
+            let mut parts = rest.splitn(2, ' ');
+            let request_id = parts.next()?.parse::<u64>().ok()?;
+            let remaining = parts.next()?;
+            (request_id, QueueSource::Liked, remaining)
         } else if let Some(rest) =
             reply.strip_prefix("QUEUE PLAYLIST ")
         {
-            let mut parts = rest.splitn(2, ' ');
+            let mut parts = rest.splitn(3, ' ');
+            let request_id = parts.next()?.parse::<u64>().ok()?;
             let playlist_id = parts.next()?.trim().to_string();
             let remaining = parts.next()?;
 
@@ -363,7 +375,11 @@ fn daemon_queue_status() -> Option<Option<QueueStatus>> {
                 return None;
             }
 
-            (QueueSource::Playlist(playlist_id), remaining)
+            (
+                request_id,
+                QueueSource::Playlist(playlist_id),
+                remaining,
+            )
         } else {
             return None;
         };
@@ -379,6 +395,7 @@ fn daemon_queue_status() -> Option<Option<QueueStatus>> {
 
     Some(Some(QueueStatus {
         source,
+        request_id,
         index,
         length,
         track_id,
@@ -1984,6 +2001,11 @@ fn main() {
     let mut selected: Option<usize> = None;
     let mut pending_queue_selection:
         Option<PendingQueueSelection> = None;
+    let mut pending_load_command: Option<PendingLoadCommand> = None;
+    let mut next_load_request_id = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|elapsed| elapsed.as_nanos() as u64)
+        .unwrap_or(1);
     let mut scroll: usize = 0;
     let mut playback_state = PlaybackState::Unknown;
     let mut now_playing: Option<NowPlaying> = None;
@@ -2617,6 +2639,11 @@ fn main() {
                                             if let Some(playlist_id) =
                                                 playlist_id
                                             {
+                                                let request_id =
+                                                    next_load_request_id;
+                                                next_load_request_id =
+                                                    next_load_request_id
+                                                        .wrapping_add(1);
                                                 selected = None;
                                                 pending_queue_selection = Some(
                                                     PendingQueueSelection {
@@ -2627,16 +2654,28 @@ fn main() {
                                                             ),
                                                         track_id:
                                                             item_id.clone(),
+                                                        request_id,
                                                         started:
                                                             std::time::Instant::now(),
                                                     },
                                                 );
-
-                                                daemon_send(&format!(
-                                                    "LOAD_PLAYLIST {} {}",
+                                                pending_load_command = Some(
+                                                    PendingLoadCommand {
+                                                        request_id,
+                                                        command: format!(
+                                                    "LOAD_PLAYLIST {} {} {}",
+                                                    request_id,
                                                     playlist_id,
                                                     item_id
-                                                ));
+                                                        ),
+                                                        started:
+                                                            std::time::Instant::now(),
+                                                    },
+                                                );
+                                                eprintln!(
+                                                    "[poc] queued playlist load request {}",
+                                                    request_id
+                                                );
                                             }
                                         }
 
@@ -2660,6 +2699,11 @@ fn main() {
                                         );
 
                                         if !item_id.is_empty() {
+                                            let request_id =
+                                                next_load_request_id;
+                                            next_load_request_id =
+                                                next_load_request_id
+                                                    .wrapping_add(1);
                                             playlist_track_selected = None;
                                             pending_queue_selection = Some(
                                                 PendingQueueSelection {
@@ -2667,15 +2711,27 @@ fn main() {
                                                         QueueSource::Liked,
                                                     track_id:
                                                         item_id.clone(),
+                                                    request_id,
                                                     started:
                                                         std::time::Instant::now(),
                                                 },
                                             );
-
-                                            daemon_send(&format!(
-                                                "LOAD_LIKED {}",
-                                                item_id
-                                            ));
+                                            pending_load_command = Some(
+                                                PendingLoadCommand {
+                                                    request_id,
+                                                    command: format!(
+                                                        "LOAD_LIKED {} {}",
+                                                        request_id,
+                                                        item_id
+                                                    ),
+                                                    started:
+                                                        std::time::Instant::now(),
+                                                },
+                                            );
+                                            eprintln!(
+                                                "[poc] queued liked load request {}",
+                                                request_id
+                                            );
                                         }
 
                                         dirty = true;
@@ -2772,6 +2828,23 @@ BRIGHTNESS_LABELS[brightness_idx]
 );
 }
 
+        if pending_load_command
+            .as_ref()
+            .map(|pending| {
+                pending.started.elapsed()
+                    >= std::time::Duration::from_millis(600)
+            })
+            .unwrap_or(false)
+        {
+            if let Some(pending) = pending_load_command.take() {
+                daemon_send(&pending.command);
+                eprintln!(
+                    "[poc] dispatched load request {}",
+                    pending.request_id
+                );
+            }
+        }
+
 // If we haven't loaded real tracks yet (daemon wasn't ready at
         // startup), retry the LIKED fetch every ~2s until it succeeds. This
         // makes the UI robust to being launched before the daemon is up.
@@ -2838,7 +2911,8 @@ BRIGHTNESS_LABELS[brightness_idx]
                     (None, _) => true,
                     (Some(_), None) => false,
                     (Some(pending), Some(queue)) => {
-                        pending.source == queue.source
+                        pending.request_id == queue.request_id
+                            && pending.source == queue.source
                             && pending.track_id == queue.track_id
                     }
                 };
@@ -2846,7 +2920,11 @@ BRIGHTNESS_LABELS[brightness_idx]
                 if queue_matches_pending {
                     if pending_queue_selection.is_some() {
                         eprintln!(
-                            "[poc] pending queue selection acknowledged"
+                            "[poc] queue request {} acknowledged",
+                            updated_queue
+                                .as_ref()
+                                .map(|queue| queue.request_id)
+                                .unwrap_or(0)
                         );
                         pending_queue_selection = None;
                     }

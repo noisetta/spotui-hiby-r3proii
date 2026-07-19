@@ -10,8 +10,9 @@
 //
 // Commands (newline-terminated, sent to the socket):
 //   LOAD <base62_track_id>   -> load + play a single track
-//   LOAD_LIKED <track_id>     -> load within the Liked Songs queue
-//   LOAD_PLAYLIST <playlist_id> <track_id>
+//   LOAD_LIKED <request_id> <track_id>
+//                            -> load within the Liked Songs queue
+//   LOAD_PLAYLIST <request_id> <playlist_id> <track_id>
 //                            -> load within a playlist queue
 //   PLAY                     -> resume
 //   PAUSE                    -> pause
@@ -78,12 +79,34 @@ struct PlaybackQueue {
     source: Option<QueueSource>,
     track_ids: Vec<String>,
     current_index: Option<usize>,
+    request_id: u64,
 }
 
 #[derive(Default)]
 struct BrowseCache {
     liked_track_ids: Vec<String>,
     playlists: HashMap<String, Vec<String>>,
+}
+
+async fn register_load_request(
+    latest_load_request: &RwLock<u64>,
+    request_id: u64,
+) -> bool {
+    let mut latest = latest_load_request.write().await;
+
+    if request_id < *latest {
+        false
+    } else {
+        *latest = request_id;
+        true
+    }
+}
+
+async fn load_request_is_current(
+    latest_load_request: &RwLock<u64>,
+    request_id: u64,
+) -> bool {
+    *latest_load_request.read().await == request_id
 }
 
 /// Keep line-oriented protocol fields from containing separators.
@@ -174,6 +197,7 @@ async fn main() {
     let browse_cache =
         Arc::new(RwLock::new(BrowseCache::default()));
     let load_mutex = Arc::new(Mutex::new(()));
+    let latest_load_request = Arc::new(RwLock::new(0u64));
     let event_player = player.clone();
     let event_state = playback_state.clone();
     let event_now_playing = now_playing.clone();
@@ -408,6 +432,7 @@ async fn main() {
     let unix_playback_queue = playback_queue.clone();
     let unix_browse_cache = browse_cache.clone();
     let unix_load_mutex = load_mutex.clone();
+    let unix_latest_load_request = latest_load_request.clone();
     let unix_task = tokio::spawn(async move {
         loop {
             match unix_listener.accept().await {
@@ -421,6 +446,8 @@ async fn main() {
                     let playback_queue = unix_playback_queue.clone();
                     let browse_cache = unix_browse_cache.clone();
                     let load_mutex = unix_load_mutex.clone();
+                    let latest_load_request =
+                        unix_latest_load_request.clone();
                     tokio::spawn(async move {
                         let (r, w) = stream.into_split();
                         handle_conn(
@@ -435,6 +462,7 @@ async fn main() {
                             playback_queue,
                             browse_cache,
                             load_mutex,
+                            latest_load_request,
                         )
                         .await;
                     });
@@ -453,6 +481,7 @@ async fn main() {
     let tcp_playback_queue = playback_queue.clone();
     let tcp_browse_cache = browse_cache.clone();
     let tcp_load_mutex = load_mutex.clone();
+    let tcp_latest_load_request = latest_load_request.clone();
     let tcp_task = tokio::spawn(async move {
         loop {
             match tcp_listener.accept().await {
@@ -466,6 +495,8 @@ async fn main() {
                     let playback_queue = tcp_playback_queue.clone();
                     let browse_cache = tcp_browse_cache.clone();
                     let load_mutex = tcp_load_mutex.clone();
+                    let latest_load_request =
+                        tcp_latest_load_request.clone();
                     tokio::spawn(async move {
                         let (r, w) = stream.into_split();
                         handle_conn(
@@ -480,6 +511,7 @@ async fn main() {
                             playback_queue,
                             browse_cache,
                             load_mutex,
+                            latest_load_request,
                         )
                         .await;
                     });
@@ -508,6 +540,7 @@ async fn handle_conn<R, W>(
     playback_queue: Arc<RwLock<PlaybackQueue>>,
     browse_cache: Arc<RwLock<BrowseCache>>,
     load_mutex: Arc<Mutex<()>>,
+    latest_load_request: Arc<RwLock<u64>>,
 ) where
     R: tokio::io::AsyncRead + Unpin,
     W: tokio::io::AsyncWrite + Unpin,
@@ -535,19 +568,77 @@ async fn handle_conn<R, W>(
                 Err(e) => format!("ERR bad track id '{arg}': {e}\n"),
             },
             "LOAD_LIKED" => {
-                let _load_guard = load_mutex.lock().await;
+                let mut args = arg.split_whitespace();
+                let request_id = args.next().and_then(|value| {
+                    value.parse::<u64>().ok()
+                });
+                let track_id = args.next().unwrap_or("");
+                let has_extra_args = args.next().is_some();
 
-                match liked_track_ids_for_load(
-                    &session,
-                    &browse_cache,
-                    arg,
-                )
-                .await
+                if request_id.is_none()
+                    || track_id.is_empty()
+                    || has_extra_args
                 {
+                    "ERR LOAD_LIKED needs request_id and track_id\n"
+                        .to_string()
+                } else {
+                    let request_id = request_id.unwrap();
+                    eprintln!(
+                        "[spotui] queued liked load request {} ({})",
+                        request_id,
+                        track_id
+                    );
+
+                    if !register_load_request(
+                        &latest_load_request,
+                        request_id,
+                    )
+                    .await
+                    {
+                        eprintln!(
+                            "[spotui] ignored stale liked load request {}",
+                            request_id
+                        );
+                        format!("OK ignored stale request {request_id}\n")
+                    } else {
+                        let _load_guard = load_mutex.lock().await;
+
+                        if !load_request_is_current(
+                            &latest_load_request,
+                            request_id,
+                        )
+                        .await
+                        {
+                            eprintln!(
+                                "[spotui] skipped superseded liked load request {}",
+                                request_id
+                            );
+                            format!("OK skipped superseded request {request_id}\n")
+                        } else {
+                            let loaded = liked_track_ids_for_load(
+                                &session,
+                                &browse_cache,
+                                track_id,
+                            )
+                            .await;
+
+                            if !load_request_is_current(
+                                &latest_load_request,
+                                request_id,
+                            )
+                            .await
+                            {
+                                eprintln!(
+                                    "[spotui] skipped superseded liked load request {} after fetch",
+                                    request_id
+                                );
+                                format!("OK skipped superseded request {request_id}\n")
+                            } else {
+                                match loaded {
                     Ok((track_ids, cache_hit)) => {
-                        match track_ids.iter().position(|id| id == arg) {
+                        match track_ids.iter().position(|id| id == track_id) {
                             Some(index) => {
-                                match SpotifyId::from_base62(arg) {
+                                match SpotifyId::from_base62(track_id) {
                                     Ok(id) => {
                                         let queue_len =
                                             track_ids.len();
@@ -559,6 +650,7 @@ async fn handle_conn<R, W>(
                                                 track_ids,
                                                 current_index:
                                                     Some(index),
+                                                request_id,
                                             };
                                         player.load(
                                             SpotifyUri::Track { id },
@@ -566,7 +658,8 @@ async fn handle_conn<R, W>(
                                             0,
                                         );
                                         eprintln!(
-                                            "[spotui] liked queue loaded cache={} -> {}/{} ({})",
+                                            "[spotui] liked request {} loaded cache={} -> {}/{} ({})",
+                                            request_id,
                                             if cache_hit {
                                                 "hit"
                                             } else {
@@ -574,53 +667,106 @@ async fn handle_conn<R, W>(
                                             },
                                             index + 1,
                                             queue_len,
-                                            arg
+                                            track_id
                                         );
                                         format!(
-                                            "OK loading liked {arg}\n"
+                                            "OK loading liked {request_id} {track_id}\n"
                                         )
                                     }
                                     Err(e) => format!(
-                                        "ERR bad track id '{arg}': {e}\n"
+                                        "ERR bad track id '{track_id}': {e}\n"
                                     ),
                                 }
                             }
                             None => format!(
-                                "ERR track '{arg}' is not in Liked Songs\n"
+                                "ERR track '{track_id}' is not in Liked Songs\n"
                             ),
                         }
                     }
                     Err(e) => {
                         format!("ERR liked queue fetch failed: {e}\n")
                     }
+                                }
+                            }
+                        }
+                    }
                 }
             }
             "LOAD_PLAYLIST" => {
                 let mut args = arg.split_whitespace();
+                let request_id = args.next().and_then(|value| {
+                    value.parse::<u64>().ok()
+                });
                 let playlist_id = args.next().unwrap_or("");
                 let track_id = args.next().unwrap_or("");
                 let has_extra_args = args.next().is_some();
 
-                if playlist_id.is_empty()
+                if request_id.is_none()
+                    || playlist_id.is_empty()
                     || track_id.is_empty()
                     || has_extra_args
                 {
                     concat!(
-                        "ERR LOAD_PLAYLIST needs playlist_id ",
-                        "and track_id\n"
+                        "ERR LOAD_PLAYLIST needs request_id, ",
+                        "playlist_id, and track_id\n"
                     )
                     .to_string()
                 } else {
+                    let request_id = request_id.unwrap();
+                    eprintln!(
+                        "[spotui] queued playlist load request {} ({})",
+                        request_id,
+                        track_id
+                    );
+
+                    if !register_load_request(
+                        &latest_load_request,
+                        request_id,
+                    )
+                    .await
+                    {
+                        eprintln!(
+                            "[spotui] ignored stale playlist load request {}",
+                            request_id
+                        );
+                        format!("OK ignored stale request {request_id}\n")
+                    } else {
                     let _load_guard = load_mutex.lock().await;
 
-                    match playlist_track_ids_for_load(
+                    if !load_request_is_current(
+                        &latest_load_request,
+                        request_id,
+                    )
+                    .await
+                    {
+                        eprintln!(
+                            "[spotui] skipped superseded playlist load request {}",
+                            request_id
+                        );
+                        format!("OK skipped superseded request {request_id}\n")
+                    } else {
+
+                    let loaded = playlist_track_ids_for_load(
                         &session,
                         &browse_cache,
                         playlist_id,
                         track_id,
                     )
+                    .await;
+
+                    if !load_request_is_current(
+                        &latest_load_request,
+                        request_id,
+                    )
                     .await
                     {
+                        eprintln!(
+                            "[spotui] skipped superseded playlist load request {} after fetch",
+                            request_id
+                        );
+                        format!("OK skipped superseded request {request_id}\n")
+                    } else {
+                    match loaded {
                         Ok((track_ids, cache_hit)) => {
                             match track_ids
                                 .iter()
@@ -644,6 +790,7 @@ async fn handle_conn<R, W>(
                                                     track_ids,
                                                     current_index:
                                                         Some(index),
+                                                    request_id,
                                                 };
                                             player.load(
                                                 SpotifyUri::Track {
@@ -653,8 +800,9 @@ async fn handle_conn<R, W>(
                                                 0,
                                             );
                                             eprintln!(
-                                                "[spotui] playlist {} queue loaded cache={} -> {}/{} ({})",
+                                                "[spotui] playlist {} request {} loaded cache={} -> {}/{} ({})",
                                                 playlist_id,
+                                                request_id,
                                                 if cache_hit {
                                                     "hit"
                                                 } else {
@@ -665,7 +813,8 @@ async fn handle_conn<R, W>(
                                                 track_id
                                             );
                                             format!(
-                                                "OK loading playlist {} {}\n",
+                                                "OK loading playlist {} {} {}\n",
+                                                request_id,
                                                 playlist_id,
                                                 track_id
                                             )
@@ -688,6 +837,9 @@ async fn handle_conn<R, W>(
                             "ERR playlist queue fetch failed: {}\n",
                             e
                         ),
+                    }
+                    }
+                    }
                     }
                 }
             }
@@ -725,7 +877,8 @@ async fn handle_conn<R, W>(
                         Some(QueueSource::Liked),
                         Some((index, track_id)),
                     ) => format!(
-                        "QUEUE LIKED {} {} {}\n",
+                        "QUEUE LIKED {} {} {} {}\n",
+                        queue.request_id,
                         index,
                         queue.track_ids.len(),
                         track_id
@@ -734,7 +887,8 @@ async fn handle_conn<R, W>(
                         Some(QueueSource::Playlist(playlist_id)),
                         Some((index, track_id)),
                     ) => format!(
-                        "QUEUE PLAYLIST {} {} {} {}\n",
+                        "QUEUE PLAYLIST {} {} {} {} {}\n",
+                        queue.request_id,
                         playlist_id,
                         index,
                         queue.track_ids.len(),
