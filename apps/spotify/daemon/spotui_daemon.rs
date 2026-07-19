@@ -28,12 +28,17 @@
 // SinkBuilder). For the HiBy we use the pipe backend piped to aplay, exactly
 // as already proven working.
 
-use std::{process::exit, sync::Arc, time::Duration};
+use std::{
+    collections::HashMap,
+    process::exit,
+    sync::Arc,
+    time::Duration,
+};
 
 use tokio::{
     io::{AsyncBufReadExt, AsyncWriteExt, BufReader},
     net::{TcpListener, UnixListener},
-    sync::RwLock,
+    sync::{Mutex, RwLock},
 };
 
 use librespot::{
@@ -73,6 +78,12 @@ struct PlaybackQueue {
     source: Option<QueueSource>,
     track_ids: Vec<String>,
     current_index: Option<usize>,
+}
+
+#[derive(Default)]
+struct BrowseCache {
+    liked_track_ids: Vec<String>,
+    playlists: HashMap<String, Vec<String>>,
 }
 
 /// Keep line-oriented protocol fields from containing separators.
@@ -160,6 +171,9 @@ async fn main() {
     let playback_position = Arc::new(RwLock::new(None::<u32>));
     let playback_queue =
         Arc::new(RwLock::new(PlaybackQueue::default()));
+    let browse_cache =
+        Arc::new(RwLock::new(BrowseCache::default()));
+    let load_mutex = Arc::new(Mutex::new(()));
     let event_player = player.clone();
     let event_state = playback_state.clone();
     let event_now_playing = now_playing.clone();
@@ -392,6 +406,8 @@ async fn main() {
     let unix_now_playing = now_playing.clone();
     let unix_playback_position = playback_position.clone();
     let unix_playback_queue = playback_queue.clone();
+    let unix_browse_cache = browse_cache.clone();
+    let unix_load_mutex = load_mutex.clone();
     let unix_task = tokio::spawn(async move {
         loop {
             match unix_listener.accept().await {
@@ -403,6 +419,8 @@ async fn main() {
                     let now_playing = unix_now_playing.clone();
                     let playback_position = unix_playback_position.clone();
                     let playback_queue = unix_playback_queue.clone();
+                    let browse_cache = unix_browse_cache.clone();
+                    let load_mutex = unix_load_mutex.clone();
                     tokio::spawn(async move {
                         let (r, w) = stream.into_split();
                         handle_conn(
@@ -415,6 +433,8 @@ async fn main() {
                             now_playing,
                             playback_position,
                             playback_queue,
+                            browse_cache,
+                            load_mutex,
                         )
                         .await;
                     });
@@ -431,6 +451,8 @@ async fn main() {
     let tcp_now_playing = now_playing.clone();
     let tcp_playback_position = playback_position.clone();
     let tcp_playback_queue = playback_queue.clone();
+    let tcp_browse_cache = browse_cache.clone();
+    let tcp_load_mutex = load_mutex.clone();
     let tcp_task = tokio::spawn(async move {
         loop {
             match tcp_listener.accept().await {
@@ -442,6 +464,8 @@ async fn main() {
                     let now_playing = tcp_now_playing.clone();
                     let playback_position = tcp_playback_position.clone();
                     let playback_queue = tcp_playback_queue.clone();
+                    let browse_cache = tcp_browse_cache.clone();
+                    let load_mutex = tcp_load_mutex.clone();
                     tokio::spawn(async move {
                         let (r, w) = stream.into_split();
                         handle_conn(
@@ -454,6 +478,8 @@ async fn main() {
                             now_playing,
                             playback_position,
                             playback_queue,
+                            browse_cache,
+                            load_mutex,
                         )
                         .await;
                     });
@@ -480,6 +506,8 @@ async fn handle_conn<R, W>(
     now_playing: Arc<RwLock<Option<NowPlaying>>>,
     playback_position: Arc<RwLock<Option<u32>>>,
     playback_queue: Arc<RwLock<PlaybackQueue>>,
+    browse_cache: Arc<RwLock<BrowseCache>>,
+    load_mutex: Arc<Mutex<()>>,
 ) where
     R: tokio::io::AsyncRead + Unpin,
     W: tokio::io::AsyncWrite + Unpin,
@@ -506,42 +534,67 @@ async fn handle_conn<R, W>(
                 }
                 Err(e) => format!("ERR bad track id '{arg}': {e}\n"),
             },
-            "LOAD_LIKED" => match liked_track_ids(&session).await {
-                Ok(track_ids) => {
-                    match track_ids.iter().position(|id| id == arg) {
-                        Some(index) => match SpotifyId::from_base62(arg) {
-                            Ok(id) => {
-                                let queue_len = track_ids.len();
-                                *playback_queue.write().await =
-                                    PlaybackQueue {
-                                        source: Some(QueueSource::Liked),
-                                        track_ids,
-                                        current_index: Some(index),
-                                    };
-                                player.load(
-                                    SpotifyUri::Track { id },
-                                    true,
-                                    0,
-                                );
-                                eprintln!(
-                                    "[spotui] liked queue loaded -> {}/{} ({})",
-                                    index + 1,
-                                    queue_len,
-                                    arg
-                                );
-                                format!("OK loading liked {arg}\n")
+            "LOAD_LIKED" => {
+                let _load_guard = load_mutex.lock().await;
+
+                match liked_track_ids_for_load(
+                    &session,
+                    &browse_cache,
+                    arg,
+                )
+                .await
+                {
+                    Ok((track_ids, cache_hit)) => {
+                        match track_ids.iter().position(|id| id == arg) {
+                            Some(index) => {
+                                match SpotifyId::from_base62(arg) {
+                                    Ok(id) => {
+                                        let queue_len =
+                                            track_ids.len();
+                                        *playback_queue.write().await =
+                                            PlaybackQueue {
+                                                source: Some(
+                                                    QueueSource::Liked,
+                                                ),
+                                                track_ids,
+                                                current_index:
+                                                    Some(index),
+                                            };
+                                        player.load(
+                                            SpotifyUri::Track { id },
+                                            true,
+                                            0,
+                                        );
+                                        eprintln!(
+                                            "[spotui] liked queue loaded cache={} -> {}/{} ({})",
+                                            if cache_hit {
+                                                "hit"
+                                            } else {
+                                                "miss"
+                                            },
+                                            index + 1,
+                                            queue_len,
+                                            arg
+                                        );
+                                        format!(
+                                            "OK loading liked {arg}\n"
+                                        )
+                                    }
+                                    Err(e) => format!(
+                                        "ERR bad track id '{arg}': {e}\n"
+                                    ),
+                                }
                             }
-                            Err(e) => format!(
-                                "ERR bad track id '{arg}': {e}\n"
+                            None => format!(
+                                "ERR track '{arg}' is not in Liked Songs\n"
                             ),
-                        },
-                        None => format!(
-                            "ERR track '{arg}' is not in Liked Songs\n"
-                        ),
+                        }
+                    }
+                    Err(e) => {
+                        format!("ERR liked queue fetch failed: {e}\n")
                     }
                 }
-                Err(e) => format!("ERR liked queue fetch failed: {e}\n"),
-            },
+            }
             "LOAD_PLAYLIST" => {
                 let mut args = arg.split_whitespace();
                 let playlist_id = args.next().unwrap_or("");
@@ -558,13 +611,17 @@ async fn handle_conn<R, W>(
                     )
                     .to_string()
                 } else {
-                    match playlist_track_ids(
+                    let _load_guard = load_mutex.lock().await;
+
+                    match playlist_track_ids_for_load(
                         &session,
+                        &browse_cache,
                         playlist_id,
+                        track_id,
                     )
                     .await
                     {
-                        Ok(track_ids) => {
+                        Ok((track_ids, cache_hit)) => {
                             match track_ids
                                 .iter()
                                 .position(|id| id == track_id)
@@ -596,8 +653,13 @@ async fn handle_conn<R, W>(
                                                 0,
                                             );
                                             eprintln!(
-                                                "[spotui] playlist {} queue loaded -> {}/{} ({})",
+                                                "[spotui] playlist {} queue loaded cache={} -> {}/{} ({})",
                                                 playlist_id,
+                                                if cache_hit {
+                                                    "hit"
+                                                } else {
+                                                    "miss"
+                                                },
                                                 index + 1,
                                                 queue_len,
                                                 track_id
@@ -718,8 +780,12 @@ async fn handle_conn<R, W>(
                 Err(_) => "ERR SEEK needs milliseconds\n".to_string(),
             },
             "SEARCH" => search_tracks(&session, arg).await,
-            "LIKED" => liked_tracks(&session).await,
-            "PLAYLIST" => playlist_tracks(&session, arg).await,
+            "LIKED" => {
+                liked_tracks(&session, &browse_cache).await
+            }
+            "PLAYLIST" => {
+                playlist_tracks(&session, arg, &browse_cache).await
+            }
             "PLAYLISTS" => public_playlists(&session).await,
             "VOL_UP" => {
                 // Step ~6% of full range per press (~16 steps floor to ceiling).
@@ -874,11 +940,25 @@ async fn search_tracks(session: &Session, query: &str) -> String {
     context_to_results(session, &uri).await
 }
 
-/// Fetch the current user's liked songs ("collection") as track results.
-async fn liked_tracks(session: &Session) -> String {
-    let user = session.username();
-    let uri = format!("spotify:user:{user}:collection");
-    context_to_results(session, &uri).await
+/// Fetch the current user's liked songs and cache their ordered IDs.
+async fn liked_tracks(
+    session: &Session,
+    browse_cache: &RwLock<BrowseCache>,
+) -> String {
+    let track_ids = match liked_track_ids(session).await {
+        Ok(track_ids) => track_ids,
+        Err(e) => return format!("ERR liked fetch failed: {e}\n"),
+    };
+
+    browse_cache.write().await.liked_track_ids =
+        track_ids.clone();
+
+    let track_uris = track_ids
+        .iter()
+        .map(|id| format!("spotify:track:{id}"))
+        .collect::<Vec<_>>();
+
+    enrich_track_uris(session, &track_uris).await
 }
 
 /// Fetch the same ordered Liked Songs IDs exposed by `LIKED`.
@@ -962,11 +1042,24 @@ async fn context_to_results(session: &Session, uri: &str) -> String {
 
 /// Fetch a specific playlist's tracks. Accepts either a bare base62 id or a
 /// full `spotify:playlist:<id>` URI.
-async fn playlist_tracks(session: &Session, playlist_arg: &str) -> String {
+async fn playlist_tracks(
+    session: &Session,
+    playlist_arg: &str,
+    browse_cache: &RwLock<BrowseCache>,
+) -> String {
     let track_ids = match playlist_track_ids(session, playlist_arg).await {
         Ok(track_ids) => track_ids,
         Err(e) => return format!("ERR {e}\n"),
     };
+
+    browse_cache
+        .write()
+        .await
+        .playlists
+        .insert(
+            playlist_cache_key(playlist_arg),
+            track_ids.clone(),
+        );
 
     let track_uris = track_ids
         .iter()
@@ -1017,6 +1110,62 @@ async fn playlist_track_ids(
     }
 
     Ok(track_ids)
+}
+
+fn playlist_cache_key(playlist_arg: &str) -> String {
+    playlist_arg
+        .strip_prefix("spotify:playlist:")
+        .unwrap_or(playlist_arg)
+        .to_string()
+}
+
+async fn liked_track_ids_for_load(
+    session: &Session,
+    browse_cache: &RwLock<BrowseCache>,
+    track_id: &str,
+) -> Result<(Vec<String>, bool), String> {
+    let cached = browse_cache.read().await.liked_track_ids.clone();
+
+    if cached.iter().any(|id| id == track_id) {
+        return Ok((cached, true));
+    }
+
+    let refreshed = liked_track_ids(session).await?;
+    browse_cache.write().await.liked_track_ids =
+        refreshed.clone();
+
+    Ok((refreshed, false))
+}
+
+async fn playlist_track_ids_for_load(
+    session: &Session,
+    browse_cache: &RwLock<BrowseCache>,
+    playlist_id: &str,
+    track_id: &str,
+) -> Result<(Vec<String>, bool), String> {
+    let cache_key = playlist_cache_key(playlist_id);
+    let cached = browse_cache
+        .read()
+        .await
+        .playlists
+        .get(&cache_key)
+        .cloned()
+        .unwrap_or_default();
+
+    if cached.iter().any(|id| id == track_id) {
+        return Ok((cached, true));
+    }
+
+    let refreshed =
+        playlist_track_ids(session, playlist_id).await?;
+
+    browse_cache
+        .write()
+        .await
+        .playlists
+        .insert(cache_key, refreshed.clone());
+
+    Ok((refreshed, false))
 }
 
 /// Shared enrichment: given a list of `spotify:track:<id>` URIs, fetch each
