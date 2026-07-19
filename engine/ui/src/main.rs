@@ -335,6 +335,25 @@ fn wifi_has_default_route() -> bool {
         .unwrap_or(false)
 }
 
+/// Check whether a named process is present without spawning `ps`. Diagnostics
+/// refreshes are intentionally read-only and avoid adding work to playback.
+fn process_running(name: &str) -> bool {
+    let Ok(entries) = std::fs::read_dir("/proc") else {
+        return false;
+    };
+
+    entries.flatten().any(|entry| {
+        entry
+            .file_name()
+            .to_string_lossy()
+            .chars()
+            .all(|character| character.is_ascii_digit())
+            && std::fs::read_to_string(entry.path().join("comm"))
+                .map(|comm| comm.trim() == name)
+                .unwrap_or(false)
+    })
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum RepeatMode {
     Off,
@@ -1138,12 +1157,12 @@ const SPECIAL_LABELS: [&str; 6] = [
 
 /// Diagnostics submenu tiles.
 const DIAGNOSTICS_LABELS: [&str; 6] = [
-    "Daemon",
-    "Storage",
-    "Memory",
+    "Wi-Fi",
+    "Spotify",
     "Audio",
-    "About",
-    "Back",
+    "Output",
+    "Queue",
+    "Refresh Status",
 ];
 
 /// Colours used by the main SpotUI interface.
@@ -1896,12 +1915,14 @@ fn draw_list(
     search_selected: Option<usize>,
     title: &str,
     battery_percent: Option<u8>,
-    storage_free_mb: Option<u64>,
-    memory_available_mb: Option<u64>,
+    _storage_free_mb: Option<u64>,
+    _memory_available_mb: Option<u64>,
     brightness_idx: usize,
     playback_state: PlaybackState,
     startup_stage: Option<StartupStage>,
     playback_modes: PlaybackModes,
+    queue_status: Option<&QueueStatus>,
+    diagnostics_refreshed: bool,
     now_playing: Option<&NowPlaying>,
     playback_position: Option<u32>,
     palette: &Palette,
@@ -2658,9 +2679,17 @@ fn draw_list(
                     )
                 } else if app_view == AppView::Diagnostics {
                     match index {
-                        0 => {
+                        0 => format!(
+                            "Wi-Fi: {}",
+                            if wifi_has_default_route() {
+                                "Connected"
+                            } else {
+                                "Offline"
+                            }
+                        ),
+                        1 => {
                             let daemon_status = match playback_state {
-                                PlaybackState::Unknown => "Connecting",
+                                PlaybackState::Unknown => "Reconnecting",
                                 PlaybackState::Stopped => "Stopped",
                                 PlaybackState::Loading => "Loading",
                                 PlaybackState::Playing => "Playing",
@@ -2668,20 +2697,40 @@ fn draw_list(
                                 PlaybackState::Error => "Error",
                             };
 
-                            format!("Daemon: {}", daemon_status)
+                            format!("Spotify: {}", daemon_status)
                         }
-                        1 => match storage_free_mb {
-                            Some(free_mb) => {
-                                format!("Storage: {} MB", free_mb)
+                        2 => format!(
+                            "Audio: {}",
+                            if process_running("aplay") {
+                                "Ready"
+                            } else {
+                                "Offline"
                             }
-                            None => "Storage: Unknown".to_string(),
-                        },
-                        2 => match memory_available_mb {
-                            Some(available_mb) => {
-                                format!("Memory: {} MB", available_mb)
-                            }
-                            None => "Memory: Unknown".to_string(),
-                        },
+                        ),
+                        3 => {
+                            let output = if switch_active(SW_BALANCE) {
+                                "4.4 mm"
+                            } else if switch_active(SW_HEADSET) {
+                                "3.5 mm"
+                            } else {
+                                "No jack"
+                            };
+                            format!("Output: {}", output)
+                        }
+                        4 => {
+                            let source = match queue_status
+                                .map(|queue| &queue.source)
+                            {
+                                Some(QueueSource::Liked) => "Liked Songs",
+                                Some(QueueSource::Playlist(_)) => "Playlist",
+                                Some(QueueSource::Search) => "Search",
+                                None => "None",
+                            };
+                            format!("Queue: {}", source)
+                        }
+                        5 if diagnostics_refreshed => {
+                            "Status Refreshed".to_string()
+                        }
                         _ => label.to_string(),
                     }
                 } else if is_active_theme {
@@ -2982,6 +3031,10 @@ fn main() {
     let mut playback_state = PlaybackState::Unknown;
     let mut playback_modes =
         daemon_playback_modes().unwrap_or_default();
+    let mut active_queue_status =
+        daemon_queue_status().unwrap_or(None);
+    let mut diagnostics_refreshed_at:
+        Option<std::time::Instant> = None;
     let mut now_playing: Option<NowPlaying> = None;
     let mut playback_position: Option<u32> = None;
     let mut theme = load_theme();
@@ -3019,6 +3072,8 @@ fn main() {
         playback_state,
         startup_stage,
         playback_modes,
+        active_queue_status.as_ref(),
+        false,
         now_playing.as_ref(),
         playback_position,
         &palette,
@@ -3618,6 +3673,9 @@ fn main() {
                                                         );
                                                     }
                                                     5 => {
+                                                        active_queue_status =
+                                                            daemon_queue_status()
+                                                                .unwrap_or(None);
                                                         app_view =
                                                             AppView::Diagnostics;
                                                         dirty = true;
@@ -3805,15 +3863,24 @@ fn main() {
                                             }
                                             AppView::Diagnostics => {
                                                 if menu_index == 5 {
-                                                    app_view = AppView::Menu;
+                                                    if let Some(updated_state) =
+                                                        daemon_playback_state()
+                                                    {
+                                                        playback_state =
+                                                            updated_state;
+                                                    }
+                                                    active_queue_status =
+                                                        daemon_queue_status()
+                                                            .unwrap_or(None);
+                                                    diagnostics_refreshed_at =
+                                                        Some(std::time::Instant::now());
                                                     dirty = true;
                                                     eprintln!(
-                                                        "[poc] app view -> {:?}",
-                                                        app_view
+                                                        "[poc] diagnostics refreshed"
                                                     );
                                                 } else {
                                                     eprintln!(
-                                                        "[poc] diagnostics placeholder -> {}",
+                                                        "[poc] diagnostics status -> {}",
                                                         label
                                                     );
                                                 }
@@ -4258,6 +4325,7 @@ BRIGHTNESS_LABELS[brightness_idx]
                         playback_state = PlaybackState::Unknown;
                         now_playing = None;
                         playback_position = None;
+                        active_queue_status = None;
                         pending_queue_selection = None;
                         dirty = true;
                         eprintln!(
@@ -4311,6 +4379,8 @@ BRIGHTNESS_LABELS[brightness_idx]
                 };
 
                 if queue_matches_pending {
+                    active_queue_status = updated_queue.clone();
+
                     if pending_queue_selection.is_some() {
                         eprintln!(
                             "[poc] queue request {} acknowledged",
@@ -4649,6 +4719,17 @@ BRIGHTNESS_LABELS[brightness_idx]
             now_playing_dirty = true;
         }
 
+        if diagnostics_refreshed_at
+            .as_ref()
+            .map(|refreshed_at| {
+                refreshed_at.elapsed().as_millis() >= 1500
+            })
+            .unwrap_or(false)
+        {
+            diagnostics_refreshed_at = None;
+            dirty = true;
+        }
+
         // Re-check the output jack four times per second. Removing an active
         // output immediately requests a pause. Connecting a jack selects its
         // route but does not resume automatically.
@@ -4732,6 +4813,8 @@ BRIGHTNESS_LABELS[brightness_idx]
                 playback_state,
                 startup_stage,
                 playback_modes,
+                active_queue_status.as_ref(),
+                diagnostics_refreshed_at.is_some(),
                 now_playing.as_ref(),
                 playback_position,
                 &palette,
