@@ -25,7 +25,7 @@ use embedded_graphics::{
     mono_font::{ascii::FONT_9X15, ascii::FONT_9X15_BOLD, MonoTextStyle},
     pixelcolor::{Rgb565, WebColors},
     prelude::*,
-    primitives::{PrimitiveStyle, Rectangle},
+    primitives::{Circle, Ellipse, PrimitiveStyle, Rectangle},
     text::{Baseline, Text},
 };
 
@@ -52,6 +52,7 @@ const ABS_MT_POSITION_X: u16 = 0x35;
 const ABS_MT_POSITION_Y: u16 = 0x36;
 const SYN_REPORT: u16 = 0x00;
 const VOLUME_POPUP_MS: u128 = 1800;
+const AMBIENT_IDLE_MS: u128 = 2000;
 
 // ---- Backlight ----------------------------------------------------------
 const BL_BRIGHTNESS: &str = "/sys/class/backlight/backlight_pwm0/brightness";
@@ -658,19 +659,19 @@ fn load_theme() -> Theme {
             Some(theme) => theme,
             None => {
                 eprintln!(
-                    "[poc] invalid saved theme {:?}; using forest",
+                    "[poc] invalid saved theme {:?}; using El Kay Kay",
                     value.trim()
                 );
-                Theme::Forest
+                Theme::ElKayKay
             }
         },
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Theme::Forest,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Theme::ElKayKay,
         Err(e) => {
             eprintln!(
-                "[poc] theme state load failed: {}; using forest",
+                "[poc] theme state load failed: {}; using El Kay Kay",
                 e
             );
-            Theme::Forest
+            Theme::ElKayKay
         }
     }
 }
@@ -827,62 +828,66 @@ enum AppView {
 /// Stable identity for every built-in SpotUI colour theme.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum Theme {
-    Forest,
-    Ocean,
-    Violet,
-    Amber,
-    Monochrome,
+    ElKayKay,
+    Tidepool,
+    CitrusGrove,
+    MonochromeStatic,
+    PaperLantern,
     DurandalTerminal,
-    Synthwave,
-    Sunset,
+    ArcadeBloom,
+    DesertBloom,
     AlNoor,
-    Crimson,
+    NightMarket,
 }
 
 impl Theme {
     fn palette(self) -> Palette {
         match self {
-            Theme::Forest => Palette::forest(),
-            Theme::Ocean => Palette::ocean(),
-            Theme::Violet => Palette::violet(),
-            Theme::Amber => Palette::amber(),
-            Theme::Monochrome => Palette::monochrome(),
+            Theme::ElKayKay => Palette::el_kay_kay(),
+            Theme::Tidepool => Palette::tidepool(),
+            Theme::CitrusGrove => Palette::citrus_grove(),
+            Theme::MonochromeStatic => Palette::monochrome_static(),
+            Theme::PaperLantern => Palette::paper_lantern(),
             Theme::DurandalTerminal => Palette::durandal_terminal(),
-            Theme::Synthwave => Palette::synthwave(),
-            Theme::Sunset => Palette::sunset(),
+            Theme::ArcadeBloom => Palette::arcade_bloom(),
+            Theme::DesertBloom => Palette::desert_bloom(),
             Theme::AlNoor => Palette::al_noor(),
-            Theme::Crimson => Palette::crimson(),
+            Theme::NightMarket => Palette::night_market(),
         }
     }
 
     /// Stable identifier stored in /usr/data/spotui_theme.
     fn key(self) -> &'static str {
         match self {
-            Theme::Forest => "forest",
-            Theme::Ocean => "ocean",
-            Theme::Violet => "violet",
-            Theme::Amber => "amber",
-            Theme::Monochrome => "monochrome",
+            Theme::ElKayKay => "el-kay-kay",
+            Theme::Tidepool => "tidepool",
+            Theme::CitrusGrove => "citrus-grove",
+            Theme::MonochromeStatic => "monochrome-static",
+            Theme::PaperLantern => "paper-lantern",
             Theme::DurandalTerminal => "durandal-terminal",
-            Theme::Synthwave => "synthwave",
-            Theme::Sunset => "sunset",
+            Theme::ArcadeBloom => "arcade-bloom",
+            Theme::DesertBloom => "desert-bloom",
             Theme::AlNoor => "al-noor",
-            Theme::Crimson => "crimson",
+            Theme::NightMarket => "night-market",
         }
     }
 
     fn from_key(key: &str) -> Option<Self> {
         match key {
-            "forest" => Some(Theme::Forest),
-            "ocean" => Some(Theme::Ocean),
-            "violet" => Some(Theme::Violet),
-            "amber" => Some(Theme::Amber),
-            "monochrome" => Some(Theme::Monochrome),
+            "el-kay-kay" | "forest" => Some(Theme::ElKayKay),
+            "tidepool" | "ocean" => Some(Theme::Tidepool),
+            "citrus-grove" | "violet" => Some(Theme::CitrusGrove),
+            "monochrome-static" | "bauhaus" | "amber" => {
+                Some(Theme::MonochromeStatic)
+            }
+            "paper-lantern" | "monochrome" => {
+                Some(Theme::PaperLantern)
+            }
             "durandal-terminal" => Some(Theme::DurandalTerminal),
-            "synthwave" => Some(Theme::Synthwave),
-            "sunset" => Some(Theme::Sunset),
+            "arcade-bloom" | "synthwave" => Some(Theme::ArcadeBloom),
+            "desert-bloom" | "sunset" => Some(Theme::DesertBloom),
             "al-noor" | "ice" => Some(Theme::AlNoor),
-            "crimson" => Some(Theme::Crimson),
+            "night-market" | "crimson" => Some(Theme::NightMarket),
             _ => None,
         }
     }
@@ -906,21 +911,21 @@ const SEARCH_KEY_ROWS: [&str; 3] = [
 
 /// Appearance submenu tiles.
 const APPEARANCE_LABELS: [&str; 6] = [
-    "Forest",
-    "Ocean",
-    "Violet",
-    "Amber",
+    "El Kay Kay",
+    "Tidepool",
+    "Citrus Grove",
     "Monochrome",
-    "Special",
+    "Paper Lantern",
+    "Page 2",
 ];
 
 /// Special theme submenu tiles.
 const SPECIAL_LABELS: [&str; 6] = [
     "Durandal",
-    "Synthwave",
-    "Sunset",
+    "Arcade Bloom",
+    "Desert Bloom",
     "Al Noor",
-    "Crimson",
+    "Night Market",
     "Back",
 ];
 
@@ -955,93 +960,93 @@ struct Palette {
 }
 
 impl Palette {
-    /// Original SpotUI green palette.
-    fn forest() -> Self {
+    /// Navy, taupe, dark-grey, purple, and pink palette.
+    fn el_kay_kay() -> Self {
         Self {
-            background: Rgb565::new(0, 0, 12),
-            header: Rgb565::new(0, 63, 0),
-            header_text: Rgb565::BLACK,
-            text: Rgb565::WHITE,
-            selected_row: Rgb565::new(0, 45, 45),
-            selected_text: Rgb565::BLACK,
-            now_playing: Rgb565::new(0, 18, 8),
-            progress_track: Rgb565::CSS_DARK_GRAY,
-            progress_fill: Rgb565::new(0, 63, 0),
-            separator: Rgb565::new(0, 24, 0),
-            toolbar: Rgb565::new(0, 38, 0),
-            border: Rgb565::CSS_DARK_GRAY,
+            background: Rgb565::new(1, 4, 10),
+            header: Rgb565::new(20, 36, 17),
+            header_text: Rgb565::new(1, 4, 10),
+            text: Rgb565::new(30, 54, 27),
+            selected_row: Rgb565::new(18, 8, 16),
+            selected_text: Rgb565::new(31, 50, 27),
+            now_playing: Rgb565::new(7, 7, 12),
+            progress_track: Rgb565::new(10, 17, 12),
+            progress_fill: Rgb565::new(31, 30, 23),
+            separator: Rgb565::new(13, 7, 12),
+            toolbar: Rgb565::new(18, 18, 17),
+            border: Rgb565::new(25, 18, 18),
         }
     }
 
-    /// Deep blue and cyan palette.
-    fn ocean() -> Self {
+    /// Petrol blue, seafoam, coral, sand, and deep-ink palette.
+    fn tidepool() -> Self {
         Self {
-            background: Rgb565::new(0, 4, 12),
-            header: Rgb565::new(0, 45, 31),
-            header_text: Rgb565::BLACK,
-            text: Rgb565::WHITE,
-            selected_row: Rgb565::new(0, 34, 31),
-            selected_text: Rgb565::BLACK,
-            now_playing: Rgb565::new(0, 12, 18),
-            progress_track: Rgb565::CSS_DARK_GRAY,
-            progress_fill: Rgb565::new(0, 45, 31),
-            separator: Rgb565::new(0, 16, 22),
-            toolbar: Rgb565::new(0, 26, 28),
-            border: Rgb565::CSS_DARK_GRAY,
+            background: Rgb565::new(1, 8, 11),
+            header: Rgb565::new(30, 30, 18),
+            header_text: Rgb565::new(1, 8, 11),
+            text: Rgb565::new(29, 55, 24),
+            selected_row: Rgb565::new(2, 35, 26),
+            selected_text: Rgb565::new(31, 60, 26),
+            now_playing: Rgb565::new(1, 16, 19),
+            progress_track: Rgb565::new(3, 24, 22),
+            progress_fill: Rgb565::new(12, 55, 24),
+            separator: Rgb565::new(18, 16, 13),
+            toolbar: Rgb565::new(2, 25, 24),
+            border: Rgb565::new(24, 26, 16),
         }
     }
 
-    /// Dark violet palette.
-    fn violet() -> Self {
+    /// Olive, chartreuse, tangerine, cream, and espresso palette.
+    fn citrus_grove() -> Self {
         Self {
-            background: Rgb565::new(5, 0, 12),
-            header: Rgb565::new(23, 18, 31),
-            header_text: Rgb565::WHITE,
-            text: Rgb565::WHITE,
-            selected_row: Rgb565::new(20, 16, 29),
+            background: Rgb565::new(4, 4, 1),
+            header: Rgb565::new(31, 30, 2),
+            header_text: Rgb565::new(4, 4, 1),
+            text: Rgb565::new(31, 58, 23),
+            selected_row: Rgb565::new(15, 28, 2),
+            selected_text: Rgb565::new(31, 61, 22),
+            now_playing: Rgb565::new(3, 12, 2),
+            progress_track: Rgb565::new(10, 20, 2),
+            progress_fill: Rgb565::new(22, 60, 3),
+            separator: Rgb565::new(12, 13, 1),
+            toolbar: Rgb565::new(10, 22, 2),
+            border: Rgb565::new(25, 25, 2),
+        }
+    }
+
+    /// High-contrast monochrome palette with an animated snow texture.
+    fn monochrome_static() -> Self {
+        Self {
+            background: Rgb565::new(2, 4, 2),
+            header: Rgb565::new(26, 52, 26),
+            header_text: Rgb565::BLACK,
+            text: Rgb565::new(29, 58, 29),
+            selected_row: Rgb565::new(18, 36, 18),
             selected_text: Rgb565::WHITE,
-            now_playing: Rgb565::new(9, 3, 16),
-            progress_track: Rgb565::CSS_DARK_GRAY,
-            progress_fill: Rgb565::new(26, 24, 31),
-            separator: Rgb565::new(11, 5, 19),
-            toolbar: Rgb565::new(15, 9, 25),
-            border: Rgb565::CSS_DARK_GRAY,
-        }
-    }
-
-    /// Warm amber palette.
-    fn amber() -> Self {
-        Self {
-            background: Rgb565::new(10, 4, 0),
-            header: Rgb565::new(31, 46, 0),
-            header_text: Rgb565::BLACK,
-            text: Rgb565::WHITE,
-            selected_row: Rgb565::new(31, 32, 0),
-            selected_text: Rgb565::BLACK,
-            now_playing: Rgb565::new(14, 8, 0),
-            progress_track: Rgb565::CSS_DARK_GRAY,
-            progress_fill: Rgb565::new(31, 46, 0),
-            separator: Rgb565::new(18, 11, 0),
-            toolbar: Rgb565::new(24, 18, 0),
-            border: Rgb565::CSS_DARK_GRAY,
-        }
-    }
-
-    /// Neutral black, white, and gray palette.
-    fn monochrome() -> Self {
-        Self {
-            background: Rgb565::BLACK,
-            header: Rgb565::WHITE,
-            header_text: Rgb565::BLACK,
-            text: Rgb565::WHITE,
-            selected_row: Rgb565::new(24, 48, 24),
-            selected_text: Rgb565::BLACK,
-            now_playing: Rgb565::new(4, 8, 4),
-            progress_track: Rgb565::CSS_DARK_GRAY,
+            now_playing: Rgb565::new(5, 10, 5),
+            progress_track: Rgb565::new(11, 22, 11),
             progress_fill: Rgb565::WHITE,
-            separator: Rgb565::new(8, 16, 8),
-            toolbar: Rgb565::new(12, 24, 12),
-            border: Rgb565::CSS_DARK_GRAY,
+            separator: Rgb565::new(9, 18, 9),
+            toolbar: Rgb565::new(13, 26, 13),
+            border: Rgb565::new(22, 44, 22),
+        }
+    }
+
+    /// Indigo, persimmon, jade, parchment, and charcoal palette.
+    fn paper_lantern() -> Self {
+        Self {
+            background: Rgb565::new(3, 4, 11),
+            header: Rgb565::new(29, 54, 23),
+            header_text: Rgb565::new(3, 4, 11),
+            text: Rgb565::new(30, 57, 25),
+            selected_row: Rgb565::new(4, 31, 17),
+            selected_text: Rgb565::new(30, 57, 25),
+            now_playing: Rgb565::new(5, 8, 10),
+            progress_track: Rgb565::new(12, 17, 13),
+            progress_fill: Rgb565::new(31, 24, 6),
+            separator: Rgb565::new(10, 8, 12),
+            toolbar: Rgb565::new(3, 20, 14),
+            border: Rgb565::new(25, 25, 9),
         }
     }
 
@@ -1063,39 +1068,39 @@ impl Palette {
         }
     }
 
-    /// Neon magenta, cyan, and deep-purple palette.
-    fn synthwave() -> Self {
+    /// Cobalt, acid-green, hot-coral, lavender, and near-black palette.
+    fn arcade_bloom() -> Self {
         Self {
-            background: Rgb565::new(4, 0, 10),
-            header: Rgb565::new(31, 4, 24),
-            header_text: Rgb565::new(0, 63, 31),
-            text: Rgb565::WHITE,
-            selected_row: Rgb565::new(0, 40, 31),
-            selected_text: Rgb565::BLACK,
-            now_playing: Rgb565::new(10, 0, 14),
-            progress_track: Rgb565::CSS_DARK_GRAY,
-            progress_fill: Rgb565::new(31, 0, 31),
-            separator: Rgb565::new(12, 0, 18),
-            toolbar: Rgb565::new(18, 2, 20),
-            border: Rgb565::new(0, 30, 25),
+            background: Rgb565::new(2, 1, 6),
+            header: Rgb565::new(3, 13, 31),
+            header_text: Rgb565::new(28, 63, 5),
+            text: Rgb565::new(25, 48, 31),
+            selected_row: Rgb565::new(20, 60, 3),
+            selected_text: Rgb565::new(2, 1, 6),
+            now_playing: Rgb565::new(8, 3, 13),
+            progress_track: Rgb565::new(12, 10, 18),
+            progress_fill: Rgb565::new(31, 18, 12),
+            separator: Rgb565::new(13, 4, 20),
+            toolbar: Rgb565::new(4, 10, 24),
+            border: Rgb565::new(20, 60, 3),
         }
     }
 
-    /// Coral, orange, gold, and dark-burgundy palette.
-    fn sunset() -> Self {
+    /// Terracotta, turquoise, saffron, plum, and bone palette.
+    fn desert_bloom() -> Self {
         Self {
-            background: Rgb565::new(8, 2, 8),
-            header: Rgb565::new(31, 30, 8),
-            header_text: Rgb565::BLACK,
-            text: Rgb565::WHITE,
-            selected_row: Rgb565::new(31, 18, 12),
-            selected_text: Rgb565::BLACK,
-            now_playing: Rgb565::new(12, 3, 5),
-            progress_track: Rgb565::CSS_DARK_GRAY,
-            progress_fill: Rgb565::new(31, 50, 5),
-            separator: Rgb565::new(18, 6, 6),
-            toolbar: Rgb565::new(24, 10, 7),
-            border: Rgb565::CSS_DARK_GRAY,
+            background: Rgb565::new(8, 3, 9),
+            header: Rgb565::new(31, 44, 5),
+            header_text: Rgb565::new(8, 3, 9),
+            text: Rgb565::new(31, 57, 24),
+            selected_row: Rgb565::new(2, 40, 25),
+            selected_text: Rgb565::new(31, 60, 26),
+            now_playing: Rgb565::new(14, 7, 7),
+            progress_track: Rgb565::new(19, 13, 9),
+            progress_fill: Rgb565::new(31, 44, 5),
+            separator: Rgb565::new(18, 8, 8),
+            toolbar: Rgb565::new(22, 12, 8),
+            border: Rgb565::new(2, 40, 25),
         }
     }
 
@@ -1117,21 +1122,21 @@ impl Palette {
         }
     }
 
-    /// Black, deep-red, and bright-scarlet palette.
-    fn crimson() -> Self {
+    /// Lacquer-red, jade, gold, midnight-blue, and charcoal palette.
+    fn night_market() -> Self {
         Self {
-            background: Rgb565::new(5, 0, 0),
-            header: Rgb565::new(31, 4, 2),
-            header_text: Rgb565::WHITE,
-            text: Rgb565::WHITE,
-            selected_row: Rgb565::new(22, 2, 3),
-            selected_text: Rgb565::WHITE,
-            now_playing: Rgb565::new(10, 0, 1),
-            progress_track: Rgb565::CSS_DARK_GRAY,
-            progress_fill: Rgb565::new(31, 10, 4),
-            separator: Rgb565::new(14, 1, 2),
-            toolbar: Rgb565::new(18, 2, 2),
-            border: Rgb565::CSS_DARK_GRAY,
+            background: Rgb565::new(1, 3, 8),
+            header: Rgb565::new(26, 5, 4),
+            header_text: Rgb565::new(31, 48, 5),
+            text: Rgb565::new(30, 56, 23),
+            selected_row: Rgb565::new(3, 31, 16),
+            selected_text: Rgb565::new(31, 58, 24),
+            now_playing: Rgb565::new(4, 7, 8),
+            progress_track: Rgb565::new(11, 13, 10),
+            progress_fill: Rgb565::new(31, 48, 5),
+            separator: Rgb565::new(14, 5, 6),
+            toolbar: Rgb565::new(18, 4, 5),
+            border: Rgb565::new(24, 35, 5),
         }
     }
 }
@@ -1139,6 +1144,336 @@ impl Palette {
 /// Number of track rows visible above the now-playing strip.
 /// Nine 60-pixel rows leave 60 pixels for current-track metadata.
 const VISIBLE_ROWS: usize = 9;
+
+fn draw_monochrome_static(
+    fb: &mut Framebuffer,
+    mut seed: u32,
+) {
+    for _ in 0..180 {
+        seed ^= seed << 13;
+        seed ^= seed >> 17;
+        seed ^= seed << 5;
+        let x = (seed % WIDTH as u32) as i32;
+
+        seed ^= seed << 13;
+        seed ^= seed >> 17;
+        seed ^= seed << 5;
+        let y = 40 + (seed % 540) as i32;
+        let level = 4 + ((seed >> 16) % 15) as u8;
+        let color = Rgb565::new(level, level * 2, level);
+
+        Pixel(Point::new(x, y), color).draw(fb).ok();
+    }
+}
+
+fn draw_al_noor_sky(
+    fb: &mut Framebuffer,
+    frame: u32,
+    palette: &Palette,
+) {
+    for (base_x, base_y, speed) in [
+        (28u32, 92u32, 1u32),
+        (250, 238, 2),
+        (118, 410, 3),
+    ] {
+        let x = ((base_x + frame * speed) % 440) as i32;
+        let drift = ((frame + base_x) % 24) as i32;
+        let y = base_y as i32 + drift - 12;
+
+        Circle::new(Point::new(x, y), 22)
+            .into_styled(PrimitiveStyle::with_fill(
+                palette.progress_fill,
+            ))
+            .draw(fb)
+            .ok();
+
+        Circle::new(Point::new(x + 7, y - 3), 22)
+            .into_styled(PrimitiveStyle::with_fill(
+                palette.background,
+            ))
+            .draw(fb)
+            .ok();
+    }
+
+    for index in 0..28u32 {
+        let x = ((index * 83 + 19 + frame * (index % 3 + 1))
+            % WIDTH as u32) as i32;
+        let y = 45
+            + ((index * 47 + frame * (index % 2 + 1)) % 525)
+                as i32;
+        let color = if (index + frame) % 4 == 0 {
+            palette.progress_fill
+        } else {
+            palette.text
+        };
+
+        Pixel(Point::new(x, y), color).draw(fb).ok();
+    }
+}
+
+fn draw_el_kay_kay_motes(
+    fb: &mut Framebuffer,
+    frame: u32,
+    palette: &Palette,
+) {
+    for index in 0..14u32 {
+        let x = ((index * 71 + frame * (index % 4 + 1))
+            % WIDTH as u32) as i32;
+        let y = 48
+            + ((index * 43 + frame * (index % 3 + 1)) % 520)
+                as i32;
+        let diameter = 1 + (index % 3);
+        let color = if (index + frame) % 4 == 0 {
+            palette.header
+        } else {
+            palette.progress_fill
+        };
+
+        Circle::new(Point::new(x, y), diameter)
+            .into_styled(PrimitiveStyle::with_fill(color))
+            .draw(fb)
+            .ok();
+    }
+}
+
+fn draw_el_kay_kay_puppy(fb: &mut Framebuffer, frame: u32) {
+    let x = 389;
+    let y = 478 + (frame % 2) as i32;
+    let white = Rgb565::WHITE;
+    let black = Rgb565::BLACK;
+    let pink = Rgb565::new(31, 30, 23);
+
+    // Symmetrical floppy ears frame a large, front-facing white head.
+    let ear_drop = (frame % 3) as i32;
+    Circle::new(Point::new(x - 13, y + 9 + ear_drop), 34)
+        .into_styled(PrimitiveStyle::with_fill(black))
+        .draw(fb)
+        .ok();
+    Circle::new(Point::new(x + 60, y + 9 + ear_drop), 34)
+        .into_styled(PrimitiveStyle::with_fill(black))
+        .draw(fb)
+        .ok();
+    Ellipse::new(Point::new(x + 3, y + 4), Size::new(76, 72))
+        .into_styled(PrimitiveStyle::with_fill(white))
+        .draw(fb)
+        .ok();
+
+    // Soft black crown patches make the white puppy markings unmistakable.
+    Circle::new(Point::new(x + 5, y - 2), 29)
+        .into_styled(PrimitiveStyle::with_fill(black))
+        .draw(fb)
+        .ok();
+    Circle::new(Point::new(x + 48, y - 2), 29)
+        .into_styled(PrimitiveStyle::with_fill(black))
+        .draw(fb)
+        .ok();
+
+    // Tall oval anime eyes with large highlights soften the expression.
+    for eye_x in [x + 15, x + 49] {
+        Ellipse::new(Point::new(eye_x, y + 24), Size::new(21, 29))
+            .into_styled(PrimitiveStyle::with_fill(black))
+            .draw(fb)
+            .ok();
+        Ellipse::new(
+            Point::new(eye_x + 5, y + 28),
+            Size::new(8, 11),
+        )
+            .into_styled(PrimitiveStyle::with_fill(white))
+            .draw(fb)
+            .ok();
+        Circle::new(Point::new(eye_x + 4, y + 43), 4)
+            .into_styled(PrimitiveStyle::with_fill(white))
+            .draw(fb)
+            .ok();
+    }
+
+    // Rounded muzzle, triangular-looking nose, small smile, and pink cheeks.
+    Circle::new(Point::new(x + 27, y + 45), 28)
+        .into_styled(PrimitiveStyle::with_fill(white))
+        .draw(fb)
+        .ok();
+    Ellipse::new(Point::new(x + 36, y + 49), Size::new(10, 8))
+        .into_styled(PrimitiveStyle::with_fill(black))
+        .draw(fb)
+        .ok();
+    Rectangle::new(Point::new(x + 40, y + 56), Size::new(2, 6))
+        .into_styled(PrimitiveStyle::with_fill(black))
+        .draw(fb)
+        .ok();
+    Circle::new(Point::new(x + 31, y + 57), 11)
+        .into_styled(PrimitiveStyle::with_stroke(black, 2))
+        .draw(fb)
+        .ok();
+    Circle::new(Point::new(x + 41, y + 57), 11)
+        .into_styled(PrimitiveStyle::with_stroke(black, 2))
+        .draw(fb)
+        .ok();
+    Circle::new(Point::new(x + 8, y + 51), 8)
+        .into_styled(PrimitiveStyle::with_fill(pink))
+        .draw(fb)
+        .ok();
+    Circle::new(Point::new(x + 66, y + 51), 8)
+        .into_styled(PrimitiveStyle::with_fill(pink))
+        .draw(fb)
+        .ok();
+}
+
+fn draw_tidepool_bubbles(
+    fb: &mut Framebuffer,
+    frame: u32,
+    palette: &Palette,
+) {
+    for index in 0..10u32 {
+        let x = ((index * 89 + frame * (index % 3 + 1))
+            % WIDTH as u32) as i32;
+        let y = 570
+            - ((index * 67 + frame * (index % 4 + 2)) % 520)
+                as i32;
+        let diameter = 3 + (index % 4) * 2;
+
+        Circle::new(Point::new(x, y), diameter)
+            .into_styled(PrimitiveStyle::with_stroke(
+                if index % 3 == 0 {
+                    palette.progress_fill
+                } else {
+                    palette.border
+                },
+                1,
+            ))
+            .draw(fb)
+            .ok();
+    }
+}
+
+fn draw_citrus_grove_leaves(
+    fb: &mut Framebuffer,
+    frame: u32,
+    palette: &Palette,
+) {
+    for index in 0..12u32 {
+        let x = ((index * 97 + frame * (index % 5 + 1))
+            % WIDTH as u32) as i32;
+        let y = 44
+            + ((index * 53 + frame * (index % 3 + 1)) % 530)
+                as i32;
+        let size = if index % 4 == 0 { 7 } else { 5 };
+
+        Rectangle::new(Point::new(x, y), Size::new(size + 2, size))
+            .into_styled(PrimitiveStyle::with_fill(
+                if index % 3 == 0 {
+                    palette.header
+                } else {
+                    palette.progress_fill
+                },
+            ))
+            .draw(fb)
+            .ok();
+    }
+}
+
+fn draw_paper_lanterns(
+    fb: &mut Framebuffer,
+    frame: u32,
+    palette: &Palette,
+) {
+    for index in 0..6u32 {
+        let x = ((index * 113 + frame * (index % 2 + 1))
+            % WIDTH as u32) as i32;
+        let y = 550
+            - ((index * 91 + frame * (index % 3 + 1)) % 500)
+                as i32;
+
+        Rectangle::new(Point::new(x, y), Size::new(9, 12))
+            .into_styled(PrimitiveStyle::with_fill(
+                if index % 2 == 0 {
+                    palette.progress_fill
+                } else {
+                    palette.header
+                },
+            ))
+            .draw(fb)
+            .ok();
+        Rectangle::new(Point::new(x + 2, y + 12), Size::new(5, 2))
+            .into_styled(PrimitiveStyle::with_fill(palette.border))
+            .draw(fb)
+            .ok();
+    }
+}
+
+fn draw_arcade_sparks(
+    fb: &mut Framebuffer,
+    frame: u32,
+    palette: &Palette,
+) {
+    for index in 0..14u32 {
+        let x = ((index * 61 + frame * (index % 4 + 2))
+            % WIDTH as u32) as i32;
+        let y = 45
+            + ((index * 79 + frame * (index % 3 + 1)) % 525)
+                as i32;
+        let color = match index % 3 {
+            0 => palette.progress_fill,
+            1 => palette.border,
+            _ => palette.header,
+        };
+
+        Rectangle::new(Point::new(x, y), Size::new(2, 2))
+            .into_styled(PrimitiveStyle::with_fill(color))
+            .draw(fb)
+            .ok();
+    }
+}
+
+fn draw_desert_dust(
+    fb: &mut Framebuffer,
+    frame: u32,
+    palette: &Palette,
+) {
+    for index in 0..11u32 {
+        let x = ((index * 101 + frame * (index % 5 + 2))
+            % WIDTH as u32) as i32;
+        let y = 70 + ((index * 47) % 480) as i32;
+        let width = 2 + index % 4;
+
+        Rectangle::new(Point::new(x, y), Size::new(width, 1))
+            .into_styled(PrimitiveStyle::with_fill(
+                if index % 4 == 0 {
+                    palette.border
+                } else {
+                    palette.progress_fill
+                },
+            ))
+            .draw(fb)
+            .ok();
+    }
+}
+
+fn draw_night_market_lights(
+    fb: &mut Framebuffer,
+    frame: u32,
+    palette: &Palette,
+) {
+    for index in 0..7u32 {
+        let x = ((index * 109 + frame * (index % 3 + 1))
+            % WIDTH as u32) as i32;
+        let y = 58
+            + ((index * 73 + frame * (index % 2 + 1)) % 500)
+                as i32;
+        let lit = (index + frame) % 4 != 0;
+
+        Rectangle::new(Point::new(x, y), Size::new(4, 6))
+            .into_styled(PrimitiveStyle::with_fill(if lit {
+                palette.progress_fill
+            } else {
+                palette.header
+            }))
+            .draw(fb)
+            .ok();
+        Pixel(Point::new(x + 1, y + 7), palette.border)
+            .draw(fb)
+            .ok();
+    }
+}
 
 /// Draw a temporary volume indicator over the now-playing strip.
 fn draw_volume_popup(
@@ -1337,6 +1672,8 @@ fn draw_list(
     playback_position: Option<u32>,
     palette: &Palette,
     active_theme: Theme,
+    static_seed: u32,
+    animation_frame: u32,
     app_view: AppView,
     exit_armed: bool,
 ) {
@@ -1345,6 +1682,27 @@ fn draw_list(
         .into_styled(PrimitiveStyle::with_fill(palette.background))
         .draw(fb)
         .ok();
+
+    if active_theme == Theme::ElKayKay {
+        draw_el_kay_kay_motes(fb, animation_frame, palette);
+        draw_el_kay_kay_puppy(fb, animation_frame);
+    } else if active_theme == Theme::Tidepool {
+        draw_tidepool_bubbles(fb, animation_frame, palette);
+    } else if active_theme == Theme::CitrusGrove {
+        draw_citrus_grove_leaves(fb, animation_frame, palette);
+    } else if active_theme == Theme::MonochromeStatic {
+        draw_monochrome_static(fb, static_seed);
+    } else if active_theme == Theme::PaperLantern {
+        draw_paper_lanterns(fb, animation_frame, palette);
+    } else if active_theme == Theme::ArcadeBloom {
+        draw_arcade_sparks(fb, animation_frame, palette);
+    } else if active_theme == Theme::DesertBloom {
+        draw_desert_dust(fb, animation_frame, palette);
+    } else if active_theme == Theme::AlNoor {
+        draw_al_noor_sky(fb, animation_frame, palette);
+    } else if active_theme == Theme::NightMarket {
+        draw_night_market_lights(fb, animation_frame, palette);
+    }
 
     // Green header bar with a title.
     Rectangle::new(Point::zero(), Size::new(WIDTH as u32, 40))
@@ -1360,7 +1718,7 @@ fn draw_list(
         AppView::SearchResults => "Search Results",
         AppView::Menu => "More",
         AppView::Appearance => "Appearance",
-        AppView::Special => "Special",
+        AppView::Special => "Appearance 2",
         AppView::Diagnostics => "Diagnostics",
     };
 
@@ -1853,19 +2211,19 @@ fn draw_list(
 
             let is_active_theme = match app_view {
                 AppView::Appearance => match index {
-                    0 => active_theme == Theme::Forest,
-                    1 => active_theme == Theme::Ocean,
-                    2 => active_theme == Theme::Violet,
-                    3 => active_theme == Theme::Amber,
-                    4 => active_theme == Theme::Monochrome,
+                    0 => active_theme == Theme::ElKayKay,
+                    1 => active_theme == Theme::Tidepool,
+                    2 => active_theme == Theme::CitrusGrove,
+                    3 => active_theme == Theme::MonochromeStatic,
+                    4 => active_theme == Theme::PaperLantern,
                     _ => false,
                 },
                 AppView::Special => match index {
                     0 => active_theme == Theme::DurandalTerminal,
-                    1 => active_theme == Theme::Synthwave,
-                    2 => active_theme == Theme::Sunset,
+                    1 => active_theme == Theme::ArcadeBloom,
+                    2 => active_theme == Theme::DesertBloom,
                     3 => active_theme == Theme::AlNoor,
-                    4 => active_theme == Theme::Crimson,
+                    4 => active_theme == Theme::NightMarket,
                     _ => false,
                 },
                 AppView::Library
@@ -2194,6 +2552,8 @@ fn main() {
     let mut playback_position: Option<u32> = None;
     let mut theme = load_theme();
     let mut palette = theme.palette();
+    let mut static_seed: u32 = 0x5a17_c9e3;
+    let mut animation_frame: u32 = 0;
     eprintln!("[poc] startup theme -> {}", theme.key());
     let mut app_view = AppView::Library;
     let mut exit_armed = false;
@@ -2226,6 +2586,8 @@ fn main() {
         playback_position,
         &palette,
         theme,
+        static_seed,
+        animation_frame,
         app_view,
         exit_armed,
     );
@@ -2303,6 +2665,8 @@ fn main() {
     let mut last_battery_check = std::time::Instant::now();
     let mut last_storage_check = std::time::Instant::now();
     let mut last_memory_check = std::time::Instant::now();
+    let mut last_static_refresh = std::time::Instant::now();
+    let mut last_user_input = std::time::Instant::now();
     let startup_time = std::time::Instant::now();
     let mut startup_brightness_applied = false;
     let mut volume_popup:
@@ -2333,6 +2697,7 @@ fn main() {
                         }
                         EV_SYN => {
                             if code == SYN_REPORT && touch_down {
+                                last_user_input = std::time::Instant::now();
                                 // Header = page up; strip above toolbar = page down.
                                 // The bottom 60px are four equal-width controls.
                                 const NOW_PLAYING_TOP: i32 = 580;
@@ -2771,19 +3136,19 @@ fn main() {
                                                     let updated_theme =
                                                         match menu_index {
                                                             0 => Some(
-                                                                Theme::Forest,
+                                                                Theme::ElKayKay,
                                                             ),
                                                             1 => Some(
-                                                                Theme::Ocean,
+                                                                Theme::Tidepool,
                                                             ),
                                                             2 => Some(
-                                                                Theme::Violet,
+                                                                Theme::CitrusGrove,
                                                             ),
                                                             3 => Some(
-                                                                Theme::Amber,
+                                                                Theme::MonochromeStatic,
                                                             ),
                                                             4 => Some(
-                                                                Theme::Monochrome,
+                                                                Theme::PaperLantern,
                                                             ),
                                                             _ => None,
                                                         };
@@ -2820,20 +3185,20 @@ fn main() {
                                                                 "Durandal Terminal",
                                                             )),
                                                             1 => Some((
-                                                                Theme::Synthwave,
-                                                                "Synthwave",
+                                                                Theme::ArcadeBloom,
+                                                                "Arcade Bloom",
                                                             )),
                                                             2 => Some((
-                                                                Theme::Sunset,
-                                                                "Sunset",
+                                                                Theme::DesertBloom,
+                                                                "Desert Bloom",
                                                             )),
                                                             3 => Some((
                                                                 Theme::AlNoor,
                                                                 "Al Noor",
                                                             )),
                                                             4 => Some((
-                                                                Theme::Crimson,
-                                                                "Crimson",
+                                                                Theme::NightMarket,
+                                                                "Night Market",
                                                             )),
                                                             _ => None,
                                                         };
@@ -3160,6 +3525,7 @@ fn main() {
                         let value = le_i32(&ev[12..16]);
                         // Act on key press (value == 1) only.
                         if etype == EV_KEY && value == 1 {
+                            last_user_input = std::time::Instant::now();
                             if code == KEY_VOLUMEUP {
                                 let reply = daemon_request("VOL_UP");
 
@@ -3595,6 +3961,32 @@ BRIGHTNESS_LABELS[brightness_idx]
             }
         }
 
+        if matches!(
+            theme,
+            Theme::ElKayKay
+                | Theme::Tidepool
+                | Theme::CitrusGrove
+                | Theme::MonochromeStatic
+                | Theme::PaperLantern
+                | Theme::ArcadeBloom
+                | Theme::DesertBloom
+                | Theme::AlNoor
+                | Theme::NightMarket
+        )
+            && pending_load_command.is_none()
+            && pending_queue_selection.is_none()
+            && playback_state != PlaybackState::Loading
+            && last_user_input.elapsed().as_millis() >= AMBIENT_IDLE_MS
+            && last_static_refresh.elapsed().as_millis() >= 1000
+        {
+            last_static_refresh = std::time::Instant::now();
+            static_seed = static_seed
+                .wrapping_mul(1_664_525)
+                .wrapping_add(1_013_904_223);
+            animation_frame = animation_frame.wrapping_add(1);
+            dirty = true;
+        }
+
         let volume_popup_expired = volume_popup
             .as_ref()
             .map(|(_, shown_at)| {
@@ -3692,6 +4084,8 @@ BRIGHTNESS_LABELS[brightness_idx]
                 playback_position,
                 &palette,
                 theme,
+                static_seed,
+                animation_frame,
                 app_view,
                 exit_armed,
             );
