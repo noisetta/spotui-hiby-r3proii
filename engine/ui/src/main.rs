@@ -322,6 +322,7 @@ fn daemon_playback_state() -> Option<PlaybackState> {
 enum QueueSource {
     Liked,
     Playlist(String),
+    Search,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -380,6 +381,13 @@ fn daemon_queue_status() -> Option<Option<QueueStatus>> {
                 QueueSource::Playlist(playlist_id),
                 remaining,
             )
+        } else if let Some(rest) =
+            reply.strip_prefix("QUEUE SEARCH ")
+        {
+            let mut parts = rest.splitn(2, ' ');
+            let request_id = parts.next()?.parse::<u64>().ok()?;
+            let remaining = parts.next()?;
+            (request_id, QueueSource::Search, remaining)
         } else {
             return None;
         };
@@ -808,6 +816,8 @@ enum AppView {
     Library,
     Playlists,
     PlaylistTracks,
+    SearchInput,
+    SearchResults,
     Menu,
     Appearance,
     Special,
@@ -880,12 +890,18 @@ impl Theme {
 
 /// Top-level menu tiles.
 const MENU_LABELS: [&str; 6] = [
-    "Playback",
+    "Search",
     "Sound",
     "Library",
     "Appearance",
     "Device",
     "Diagnostics",
+];
+
+const SEARCH_KEY_ROWS: [&str; 3] = [
+    "QWERTYUIOP",
+    "ASDFGHJKL",
+    "ZXCVBNM",
 ];
 
 /// Appearance submenu tiles.
@@ -1301,12 +1317,16 @@ fn draw_list(
     items: &[TrackItem],
     playlists: &[PlaylistItem],
     playlist_tracks: &[TrackItem],
+    search_results: &[TrackItem],
+    search_query: &str,
     scroll: usize,
     playlist_scroll: usize,
     playlist_track_scroll: usize,
+    search_scroll: usize,
     selected: Option<usize>,
     playlist_selected: Option<usize>,
     playlist_track_selected: Option<usize>,
+    search_selected: Option<usize>,
     title: &str,
     battery_percent: Option<u8>,
     storage_free_mb: Option<u64>,
@@ -1336,6 +1356,8 @@ fn draw_list(
         AppView::Library => title,
         AppView::Playlists => "Playlists",
         AppView::PlaylistTracks => "Playlist",
+        AppView::SearchInput => "Search",
+        AppView::SearchResults => "Search Results",
         AppView::Menu => "More",
         AppView::Appearance => "Appearance",
         AppView::Special => "Special",
@@ -1406,6 +1428,11 @@ fn draw_list(
                 playlist_tracks.len(),
                 end,
             )
+        }
+        AppView::SearchResults => {
+            let end = (search_scroll + VISIBLE_ROWS)
+                .min(search_results.len());
+            (search_scroll, search_results.len(), end)
         }
         _ => (0, 0, 0),
     };
@@ -1588,6 +1615,146 @@ fn draw_list(
                 .ok();
             }
         }
+        AppView::SearchResults => {
+            for (row, index) in
+                (search_scroll..list_end).enumerate()
+            {
+                let item = &search_results[index];
+                let mut label = item.label();
+                let y = 40 + row as i32 * ROW_HEIGHT;
+                let is_selected = search_selected == Some(index);
+
+                label = truncate_label(
+                    &label,
+                    if is_selected { 50 } else { 52 },
+                );
+
+                if is_selected {
+                    Rectangle::new(
+                        Point::new(0, y),
+                        Size::new(WIDTH as u32, ROW_HEIGHT as u32),
+                    )
+                    .into_styled(PrimitiveStyle::with_fill(
+                        palette.selected_row,
+                    ))
+                    .draw(fb)
+                    .ok();
+
+                    Text::with_baseline(
+                        &format!("> {}", label),
+                        Point::new(10, y + 22),
+                        sel_style,
+                        Baseline::Top,
+                    )
+                    .draw(fb)
+                    .ok();
+                } else {
+                    Text::with_baseline(
+                        &label,
+                        Point::new(10, y + 22),
+                        text_style,
+                        Baseline::Top,
+                    )
+                    .draw(fb)
+                    .ok();
+                }
+
+                Rectangle::new(
+                    Point::new(0, y + ROW_HEIGHT - 1),
+                    Size::new(WIDTH as u32, 1),
+                )
+                .into_styled(PrimitiveStyle::with_fill(
+                    palette.border,
+                ))
+                .draw(fb)
+                .ok();
+            }
+        }
+        AppView::SearchInput => {
+            Rectangle::new(
+                Point::new(0, 40),
+                Size::new(WIDTH as u32, 540),
+            )
+            .into_styled(PrimitiveStyle::with_fill(palette.background))
+            .draw(fb)
+            .ok();
+
+            let shown_query = if search_query.is_empty() {
+                "Tap letters to search".to_string()
+            } else {
+                truncate_label(search_query, 48)
+            };
+
+            Text::with_baseline(
+                &shown_query,
+                Point::new(12, 62),
+                MonoTextStyle::new(&FONT_9X15_BOLD, palette.text),
+                Baseline::Top,
+            )
+            .draw(fb)
+            .ok();
+
+            for (row_index, row_keys) in
+                SEARCH_KEY_ROWS.iter().enumerate()
+            {
+                let key_count = row_keys.chars().count() as i32;
+                let key_width = 48;
+                let row_width = key_count * key_width;
+                let start_x = (WIDTH as i32 - row_width) / 2;
+                let key_y = 105 + row_index as i32 * 105;
+
+                for (column, key) in row_keys.chars().enumerate() {
+                    let key_x = start_x + column as i32 * key_width;
+                    Rectangle::new(
+                        Point::new(key_x + 2, key_y),
+                        Size::new((key_width - 4) as u32, 92),
+                    )
+                    .into_styled(PrimitiveStyle::with_fill(
+                        palette.now_playing,
+                    ))
+                    .draw(fb)
+                    .ok();
+
+                    Text::with_baseline(
+                        &key.to_string(),
+                        Point::new(key_x + 20, key_y + 36),
+                        MonoTextStyle::new(
+                            &FONT_9X15_BOLD,
+                            palette.text,
+                        ),
+                        Baseline::Top,
+                    )
+                    .draw(fb)
+                    .ok();
+                }
+            }
+
+            for (x, width, label) in [
+                (0, 120, "Clear"),
+                (120, 120, "Space"),
+                (240, 120, "Delete"),
+                (360, 120, "Go"),
+            ] {
+                Rectangle::new(
+                    Point::new(x, 420),
+                    Size::new(width, 120),
+                )
+                .into_styled(PrimitiveStyle::with_fill(
+                    palette.now_playing,
+                ))
+                .draw(fb)
+                .ok();
+
+                Text::with_baseline(
+                    label,
+                    Point::new(x + 12, 468),
+                    MonoTextStyle::new(&FONT_9X15_BOLD, palette.text),
+                    Baseline::Top,
+                )
+                .draw(fb)
+                .ok();
+            }
+        }
         _ => {}
     }
 
@@ -1597,6 +1764,7 @@ fn draw_list(
         AppView::Library
             | AppView::Playlists
             | AppView::PlaylistTracks
+            | AppView::SearchResults
     ) && list_scroll > 0
     {
         Text::with_baseline(
@@ -1614,6 +1782,7 @@ fn draw_list(
         AppView::Library
             | AppView::Playlists
             | AppView::PlaylistTracks
+            | AppView::SearchResults
     ) && list_end < list_length
     {
         Text::with_baseline(
@@ -1629,7 +1798,11 @@ fn draw_list(
     // Menu screens replace the visible library area while preserving
     // the header, now-playing strip, and toolbar.
     let visible_menu_labels = match app_view {
-        AppView::Library | AppView::Playlists | AppView::PlaylistTracks => None,
+        AppView::Library
+        | AppView::Playlists
+        | AppView::PlaylistTracks
+        | AppView::SearchInput
+        | AppView::SearchResults => None,
         AppView::Menu => Some(&MENU_LABELS),
         AppView::Appearance => Some(&APPEARANCE_LABELS),
         AppView::Special => Some(&SPECIAL_LABELS),
@@ -1698,6 +1871,8 @@ fn draw_list(
                 AppView::Library
                 | AppView::Playlists
                 | AppView::PlaylistTracks
+                | AppView::SearchInput
+                | AppView::SearchResults
                 | AppView::Menu
                 | AppView::Diagnostics => false,
             };
@@ -1792,7 +1967,10 @@ fn draw_list(
         if playback_state.is_paused() { "Resume" } else { "Pause" };
     let menu_label = match app_view {
         AppView::Library => "More",
-        AppView::Playlists | AppView::PlaylistTracks => "Back",
+        AppView::Playlists
+        | AppView::PlaylistTracks
+        | AppView::SearchInput
+        | AppView::SearchResults => "Back",
         AppView::Menu
         | AppView::Appearance
         | AppView::Special
@@ -1996,6 +2174,10 @@ fn main() {
     let mut playlist_tracks: Vec<TrackItem> = Vec::new();
     let mut playlist_track_selected: Option<usize> = None;
     let mut playlist_track_scroll: usize = 0;
+    let mut search_query = String::new();
+    let mut search_results: Vec<TrackItem> = Vec::new();
+    let mut search_selected: Option<usize> = None;
+    let mut search_scroll: usize = 0;
 
     let mut brightness_idx: usize = load_brightness_idx();
     let mut selected: Option<usize> = None;
@@ -2024,12 +2206,16 @@ fn main() {
         &items,
         &playlists,
         &playlist_tracks,
+        &search_results,
+        &search_query,
         scroll,
         playlist_scroll,
         playlist_track_scroll,
+        search_scroll,
         selected,
         playlist_selected,
         playlist_track_selected,
+        search_selected,
         title,
         battery_percent,
         storage_free_mb,
@@ -2225,6 +2411,27 @@ fn main() {
                                                 playlist_track_scroll
                                             );
                                         }
+                                        AppView::SearchResults => {
+                                            let max_scroll = search_results
+                                                .len()
+                                                .saturating_sub(VISIBLE_ROWS);
+
+                                            if cur_x < WIDTH as i32 - 120 {
+                                                search_scroll =
+                                                    search_scroll
+                                                        .saturating_sub(page);
+                                            } else {
+                                                search_scroll =
+                                                    (search_scroll + page)
+                                                        .min(max_scroll);
+                                            }
+
+                                            dirty = true;
+                                            eprintln!(
+                                                "[poc] search scroll -> {}",
+                                                search_scroll
+                                            );
+                                        }
                                         _ => {}
                                     }
                                 } else if cur_y >= TOOLBAR_TOP {
@@ -2273,6 +2480,12 @@ fn main() {
                                                 AppView::Playlists => AppView::Menu,
                                                 AppView::PlaylistTracks => {
                                                     AppView::Playlists
+                                                }
+                                                AppView::SearchInput => {
+                                                    AppView::Menu
+                                                }
+                                                AppView::SearchResults => {
+                                                    AppView::SearchInput
                                                 }
                                                 AppView::Menu => AppView::Library,
                                                 AppView::Appearance => AppView::Menu,
@@ -2336,6 +2549,118 @@ fn main() {
                                             }
                                         }
                                     }
+                                } else if app_view == AppView::SearchInput {
+                                    exit_armed = false;
+
+                                    if cur_y >= 105 && cur_y < 407 {
+                                        let row_index =
+                                            ((cur_y - 105) / 105) as usize;
+
+                                        if let Some(row_keys) =
+                                            SEARCH_KEY_ROWS.get(row_index)
+                                        {
+                                            let key_count =
+                                                row_keys.chars().count() as i32;
+                                            let key_width = 48;
+                                            let row_width =
+                                                key_count * key_width;
+                                            let start_x =
+                                                (WIDTH as i32 - row_width) / 2;
+                                            let relative_x = cur_x - start_x;
+
+                                            if relative_x >= 0 {
+                                                let column =
+                                                    (relative_x / key_width)
+                                                        as usize;
+
+                                                if let Some(key) =
+                                                    row_keys.chars().nth(column)
+                                                {
+                                                    if search_query
+                                                        .chars()
+                                                        .count()
+                                                        < 48
+                                                    {
+                                                        search_query.push(
+                                                            key.to_ascii_lowercase(),
+                                                        );
+                                                        dirty = true;
+                                                    }
+                                                }
+                                            }
+                                        }
+                                    } else if cur_y >= 420
+                                        && cur_y < 540
+                                    {
+                                        let safe_x = cur_x
+                                            .max(0)
+                                            .min(WIDTH as i32 - 1);
+
+                                        match safe_x / 120 {
+                                            0 => {
+                                                search_query.clear();
+                                                dirty = true;
+                                            }
+                                            1 => {
+                                                if !search_query.is_empty()
+                                                    && !search_query
+                                                        .ends_with(' ')
+                                                    && search_query
+                                                        .chars()
+                                                        .count()
+                                                        < 48
+                                                {
+                                                    search_query.push(' ');
+                                                    dirty = true;
+                                                }
+                                            }
+                                            2 => {
+                                                search_query.pop();
+                                                dirty = true;
+                                            }
+                                            3 => {
+                                                let query =
+                                                    search_query.trim();
+
+                                                if !query.is_empty() {
+                                                    eprintln!(
+                                                        "[poc] searching -> {}",
+                                                        query
+                                                    );
+                                                    let fetched = daemon_query(
+                                                        &format!(
+                                                            "SEARCH {}",
+                                                            query
+                                                        ),
+                                                    );
+                                                    let result_count =
+                                                        fetched.len();
+                                                    search_results =
+                                                        if fetched.is_empty() {
+                                                            vec![TrackItem {
+                                                                id: String::new(),
+                                                                name: "No search results"
+                                                                    .to_string(),
+                                                                artist:
+                                                                    String::new(),
+                                                            }]
+                                                        } else {
+                                                            fetched
+                                                        };
+                                                    search_scroll = 0;
+                                                    search_selected = None;
+                                                    app_view =
+                                                        AppView::SearchResults;
+                                                    dirty = true;
+                                                    eprintln!(
+                                                        "[poc] loaded {} search results",
+                                                        result_count
+                                                    );
+                                                }
+                                            }
+                                            _ => {}
+                                        }
+                                    }
                                 } else if matches!(
                                     app_view,
                                     AppView::Menu
@@ -2359,8 +2684,10 @@ fn main() {
                                         AppView::Diagnostics => &DIAGNOSTICS_LABELS,
                                         AppView::Library
                                         | AppView::Playlists
-                                        | AppView::PlaylistTracks => &MENU_LABELS,
-                                    };
+                                        | AppView::PlaylistTracks
+                                        | AppView::SearchInput
+                                        | AppView::SearchResults => &MENU_LABELS,
+                                        };
 
                                     if let Some(label) =
                                         menu_labels.get(menu_index)
@@ -2368,6 +2695,15 @@ fn main() {
                                         match app_view {
                                             AppView::Menu => {
                                                 match menu_index {
+                                                    0 => {
+                                                        app_view =
+                                                            AppView::SearchInput;
+                                                        dirty = true;
+                                                        eprintln!(
+                                                            "[poc] app view -> {:?}",
+                                                            app_view
+                                                        );
+                                                    }
                                                     2 => {
                                                         let fetched =
                                                             daemon_playlist_query(
@@ -2536,8 +2872,74 @@ fn main() {
                                             }
                                             AppView::Library
                                             | AppView::Playlists
-                                            | AppView::PlaylistTracks => {}
+                                            | AppView::PlaylistTracks
+                                            | AppView::SearchInput
+                                            | AppView::SearchResults => {}
                                         }
+                                    }
+                                } else if app_view
+                                    == AppView::SearchResults
+                                {
+                                    let rel = cur_y - LIST_TOP;
+                                    let visible_row =
+                                        (rel / ROW_HEIGHT) as usize;
+                                    let index =
+                                        search_scroll + visible_row;
+
+                                    if index < search_results.len() {
+                                        search_selected = Some(index);
+                                        exit_armed = false;
+
+                                        let item_id =
+                                            search_results[index].id.clone();
+                                        let item_name =
+                                            search_results[index].name.clone();
+
+                                        eprintln!(
+                                            "[poc] tapped search result {}: {} ({})",
+                                            index,
+                                            item_name,
+                                            item_id
+                                        );
+
+                                        if !item_id.is_empty() {
+                                            let request_id =
+                                                next_load_request_id;
+                                            next_load_request_id =
+                                                next_load_request_id
+                                                    .wrapping_add(1);
+                                            selected = None;
+                                            playlist_track_selected = None;
+                                            pending_queue_selection = Some(
+                                                PendingQueueSelection {
+                                                    source:
+                                                        QueueSource::Search,
+                                                    track_id:
+                                                        item_id.clone(),
+                                                    request_id,
+                                                    started:
+                                                        std::time::Instant::now(),
+                                                },
+                                            );
+                                            pending_load_command = Some(
+                                                PendingLoadCommand {
+                                                    request_id,
+                                                    command: format!(
+                                                        "LOAD_SEARCH {} {}",
+                                                        request_id,
+                                                        item_id
+                                                    ),
+                                                    started:
+                                                        std::time::Instant::now(),
+                                                },
+                                            );
+                                            eprintln!(
+                                                "[poc] queued search load request {}",
+                                                request_id
+                                            );
+                                        }
+
+                                        dirty = true;
                                     }
                                 } else if app_view
                                     == AppView::Playlists
@@ -2931,6 +3333,7 @@ BRIGHTNESS_LABELS[brightness_idx]
 
                     let mut updated_liked_selected = None;
                     let mut updated_playlist_track_selected = None;
+                    let mut updated_search_selected = None;
 
                     if let Some(queue) = updated_queue.as_ref() {
                         match &queue.source {
@@ -2990,6 +3393,29 @@ BRIGHTNESS_LABELS[brightness_idx]
                                                 })
                                         };
                                 }
+                            }
+                            QueueSource::Search => {
+                                let indexed_match = search_results
+                                    .get(queue.index)
+                                    .map(|item| {
+                                        item.id.as_str()
+                                            == queue.track_id.as_str()
+                                    })
+                                    .unwrap_or(false);
+
+                                updated_search_selected =
+                                    if indexed_match {
+                                        Some(queue.index)
+                                    } else {
+                                        search_results
+                                            .iter()
+                                            .position(|item| {
+                                                item.id.as_str()
+                                                    == queue
+                                                        .track_id
+                                                        .as_str()
+                                            })
+                                    };
                             }
                         }
                     }
@@ -3060,6 +3486,38 @@ BRIGHTNESS_LABELS[brightness_idx]
                             _ => {
                                 eprintln!(
                                     "[poc] playlist queue selection -> none"
+                                );
+                            }
+                        }
+                    }
+
+                    if updated_search_selected != search_selected {
+                        search_selected = updated_search_selected;
+                        dirty = true;
+
+                        match (
+                            search_selected,
+                            updated_queue.as_ref(),
+                        ) {
+                            (
+                                Some(index),
+                                Some(QueueStatus {
+                                    source: QueueSource::Search,
+                                    length,
+                                    track_id,
+                                    ..
+                                }),
+                            ) => {
+                                eprintln!(
+                                    "[poc] search queue selection -> {}/{} ({})",
+                                    index + 1,
+                                    length,
+                                    track_id
+                                );
+                            }
+                            _ => {
+                                eprintln!(
+                                    "[poc] search queue selection -> none"
                                 );
                             }
                         }
@@ -3214,12 +3672,16 @@ BRIGHTNESS_LABELS[brightness_idx]
                 &items,
                 &playlists,
                 &playlist_tracks,
+                &search_results,
+                &search_query,
                 scroll,
                 playlist_scroll,
                 playlist_track_scroll,
+                search_scroll,
                 selected,
                 playlist_selected,
                 playlist_track_selected,
+                search_selected,
                 title,
                 battery_percent,
                 storage_free_mb,

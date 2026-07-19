@@ -14,6 +14,8 @@
 //                            -> load within the Liked Songs queue
 //   LOAD_PLAYLIST <request_id> <playlist_id> <track_id>
 //                            -> load within a playlist queue
+//   LOAD_SEARCH <request_id> <track_id>
+//                            -> load within the latest search queue
 //   PLAY                     -> resume
 //   PAUSE                    -> pause
 //   STOP                     -> stop
@@ -72,6 +74,7 @@ struct NowPlaying {
 enum QueueSource {
     Liked,
     Playlist(String),
+    Search,
 }
 
 #[derive(Default)]
@@ -86,6 +89,7 @@ struct PlaybackQueue {
 struct BrowseCache {
     liked_track_ids: Vec<String>,
     playlists: HashMap<String, Vec<String>>,
+    search_track_ids: Vec<String>,
 }
 
 async fn register_load_request(
@@ -223,6 +227,9 @@ async fn main() {
                             }
                             Some(QueueSource::Playlist(playlist_id)) => {
                                 format!("playlist {playlist_id}")
+                            }
+                            Some(QueueSource::Search) => {
+                                "search".to_string()
                             }
                             None => "unknown".to_string(),
                         };
@@ -843,6 +850,107 @@ async fn handle_conn<R, W>(
                     }
                 }
             }
+            "LOAD_SEARCH" => {
+                let mut args = arg.split_whitespace();
+                let request_id = args.next().and_then(|value| {
+                    value.parse::<u64>().ok()
+                });
+                let track_id = args.next().unwrap_or("");
+                let has_extra_args = args.next().is_some();
+
+                if request_id.is_none()
+                    || track_id.is_empty()
+                    || has_extra_args
+                {
+                    "ERR LOAD_SEARCH needs request_id and track_id\n"
+                        .to_string()
+                } else {
+                    let request_id = request_id.unwrap();
+                    eprintln!(
+                        "[spotui] queued search load request {} ({})",
+                        request_id,
+                        track_id
+                    );
+
+                    if !register_load_request(
+                        &latest_load_request,
+                        request_id,
+                    )
+                    .await
+                    {
+                        eprintln!(
+                            "[spotui] ignored stale search load request {}",
+                            request_id
+                        );
+                        format!("OK ignored stale request {request_id}\n")
+                    } else {
+                        let _load_guard = load_mutex.lock().await;
+
+                        if !load_request_is_current(
+                            &latest_load_request,
+                            request_id,
+                        )
+                        .await
+                        {
+                            eprintln!(
+                                "[spotui] skipped superseded search load request {}",
+                                request_id
+                            );
+                            format!("OK skipped superseded request {request_id}\n")
+                        } else {
+                            let track_ids = browse_cache
+                                .read()
+                                .await
+                                .search_track_ids
+                                .clone();
+
+                            match track_ids
+                                .iter()
+                                .position(|id| id == track_id)
+                            {
+                                Some(index) => {
+                                    match SpotifyId::from_base62(track_id) {
+                                        Ok(id) => {
+                                            let queue_len = track_ids.len();
+                                            *playback_queue.write().await =
+                                                PlaybackQueue {
+                                                    source: Some(
+                                                        QueueSource::Search,
+                                                    ),
+                                                    track_ids,
+                                                    current_index:
+                                                        Some(index),
+                                                    request_id,
+                                                };
+                                            player.load(
+                                                SpotifyUri::Track { id },
+                                                true,
+                                                0,
+                                            );
+                                            eprintln!(
+                                                "[spotui] search request {} loaded -> {}/{} ({})",
+                                                request_id,
+                                                index + 1,
+                                                queue_len,
+                                                track_id
+                                            );
+                                            format!(
+                                                "OK loading search {request_id} {track_id}\n"
+                                            )
+                                        }
+                                        Err(e) => format!(
+                                            "ERR bad track id '{track_id}': {e}\n"
+                                        ),
+                                    }
+                                }
+                                None => format!(
+                                    "ERR track '{track_id}' is not in current search results\n"
+                                ),
+                            }
+                        }
+                    }
+                }
+            }
             "PLAY" => {
                 player.play();
                 "OK play\n".to_string()
@@ -894,6 +1002,16 @@ async fn handle_conn<R, W>(
                         queue.track_ids.len(),
                         track_id
                     ),
+                    (
+                        Some(QueueSource::Search),
+                        Some((index, track_id)),
+                    ) => format!(
+                        "QUEUE SEARCH {} {} {} {}\n",
+                        queue.request_id,
+                        index,
+                        queue.track_ids.len(),
+                        track_id
+                    ),
                     _ => "QUEUE NONE\n".to_string(),
                 }
             }
@@ -933,7 +1051,9 @@ async fn handle_conn<R, W>(
                 }
                 Err(_) => "ERR SEEK needs milliseconds\n".to_string(),
             },
-            "SEARCH" => search_tracks(&session, arg).await,
+            "SEARCH" => {
+                search_tracks(&session, arg, &browse_cache).await
+            }
             "LIKED" => {
                 liked_tracks(&session, &browse_cache).await
             }
@@ -1082,7 +1202,11 @@ async fn public_playlists(session: &Session) -> String {
 ///   END <count>
 ///
 /// On error or no results, returns a single status line.
-async fn search_tracks(session: &Session, query: &str) -> String {
+async fn search_tracks(
+    session: &Session,
+    query: &str,
+    browse_cache: &RwLock<BrowseCache>,
+) -> String {
     if query.is_empty() {
         return "ERR empty query\n".to_string();
     }
@@ -1091,7 +1215,58 @@ async fn search_tracks(session: &Session, query: &str) -> String {
     let q = query.split_whitespace().collect::<Vec<_>>().join("+");
     let uri = format!("spotify:search:{q}");
 
-    context_to_results(session, &uri).await
+    let track_ids = match context_track_ids(session, &uri).await {
+        Ok(track_ids) => track_ids,
+        Err(e) => return format!("ERR {e}\n"),
+    };
+
+    browse_cache.write().await.search_track_ids =
+        track_ids.clone();
+
+    let track_uris = track_ids
+        .iter()
+        .map(|id| format!("spotify:track:{id}"))
+        .collect::<Vec<_>>();
+
+    enrich_track_uris(session, &track_uris).await
+}
+
+async fn context_track_ids(
+    session: &Session,
+    uri: &str,
+) -> Result<Vec<String>, String> {
+    const MAX_RESULTS: usize = 50;
+
+    let context = session
+        .spclient()
+        .get_context(uri)
+        .await
+        .map_err(|e| format!("context failed: {e}"))?;
+
+    let mut track_ids = Vec::new();
+
+    for page in &context.pages {
+        for track in &page.tracks {
+            let Some(uri) = track.uri.as_ref() else {
+                continue;
+            };
+            let Some(id) = uri.strip_prefix("spotify:track:") else {
+                continue;
+            };
+
+            track_ids.push(id.to_string());
+
+            if track_ids.len() >= MAX_RESULTS {
+                break;
+            }
+        }
+
+        if !track_ids.is_empty() {
+            break;
+        }
+    }
+
+    Ok(track_ids)
 }
 
 /// Fetch the current user's liked songs and cache their ordered IDs.
@@ -1158,40 +1333,6 @@ fn spotify_track_base62(uri: &SpotifyUri) -> Option<String> {
         SpotifyUri::Track { id } => id.to_base62().ok(),
         _ => None,
     }
-}
-
-/// Resolve any context URI (search, collection, artist, etc.) into enriched
-/// track result lines. Takes the first non-empty page, caps the count, and
-/// enriches names via Track::get.
-async fn context_to_results(session: &Session, uri: &str) -> String {
-    // Cap results. 50 gives enough to scroll while keeping on-device
-    // enrichment (sequential Track::get calls) responsive.
-    const MAX_RESULTS: usize = 50;
-
-    let ctx = match session.spclient().get_context(uri).await {
-        Ok(c) => c,
-        Err(e) => return format!("ERR context failed: {e}\n"),
-    };
-
-    // Collect track URIs from the first page that has inline tracks.
-    let mut track_uris: Vec<String> = Vec::new();
-    for page in &ctx.pages {
-        for t in &page.tracks {
-            if let Some(u) = t.uri.as_ref() {
-                if u.starts_with("spotify:track:") {
-                    track_uris.push(u.clone());
-                }
-                if track_uris.len() >= MAX_RESULTS {
-                    break;
-                }
-            }
-        }
-        if !track_uris.is_empty() {
-            break; // first non-empty page is enough for v1
-        }
-    }
-
-    enrich_track_uris(session, &track_uris).await
 }
 
 /// Fetch a specific playlist's tracks. Accepts either a bare base62 id or a
