@@ -1904,6 +1904,7 @@ fn draw_list(
     playlist_tracks: &[TrackItem],
     search_results: &[TrackItem],
     search_query: &str,
+    search_in_progress: bool,
     up_next_page: Option<&QueuePage>,
     scroll: usize,
     playlist_scroll: usize,
@@ -2461,7 +2462,9 @@ fn draw_list(
             .draw(fb)
             .ok();
 
-            let shown_query = if search_query.is_empty() {
+            let shown_query = if search_in_progress {
+                "Searching...".to_string()
+            } else if search_query.is_empty() {
                 "Tap letters to search".to_string()
             } else {
                 truncate_label(search_query, 48)
@@ -2515,7 +2518,15 @@ fn draw_list(
                 (0, 120, "Clear"),
                 (120, 120, "Space"),
                 (240, 120, "Delete"),
-                (360, 120, "Go"),
+                (
+                    360,
+                    120,
+                    if search_in_progress {
+                        "Wait"
+                    } else {
+                        "Go"
+                    },
+                ),
             ] {
                 Rectangle::new(
                     Point::new(x, 420),
@@ -3015,6 +3026,9 @@ fn main() {
     let mut search_results: Vec<TrackItem> = Vec::new();
     let mut search_selected: Option<usize> = None;
     let mut search_scroll: usize = 0;
+    let mut search_in_progress = false;
+    let mut search_receiver:
+        Option<std::sync::mpsc::Receiver<Vec<TrackItem>>> = None;
     let mut up_next_page: Option<QueuePage> = None;
     let mut up_next_offset: usize = 0;
 
@@ -3055,6 +3069,7 @@ fn main() {
         &playlist_tracks,
         &search_results,
         &search_query,
+        search_in_progress,
         up_next_page.as_ref(),
         scroll,
         playlist_scroll,
@@ -3363,6 +3378,15 @@ fn main() {
                                         }
                                         3 => {
                                             exit_armed = false;
+                                            if app_view == AppView::SearchInput
+                                                && search_in_progress
+                                            {
+                                                search_in_progress = false;
+                                                search_receiver = None;
+                                                eprintln!(
+                                                    "[poc] search cancelled"
+                                                );
+                                            }
                                             app_view = match app_view {
                                                 AppView::Library => AppView::Menu,
                                                 AppView::Playlists => AppView::Menu,
@@ -3466,6 +3490,14 @@ fn main() {
                                 } else if app_view == AppView::SearchInput {
                                     exit_armed = false;
 
+                                    if search_in_progress {
+                                        // Drain every touch report queued while
+                                        // the request is running. None may be
+                                        // reinterpreted as a result-row tap.
+                                        touch_down = false;
+                                        continue;
+                                    }
+
                                     if cur_y >= 105 && cur_y < 407 {
                                         let row_index =
                                             ((cur_y - 105) / 105) as usize;
@@ -3537,39 +3569,27 @@ fn main() {
                                                     search_query.trim();
 
                                                 if !query.is_empty() {
+                                                    let query =
+                                                        query.to_string();
                                                     eprintln!(
                                                         "[poc] searching -> {}",
                                                         query
                                                     );
-                                                    let fetched = daemon_query(
-                                                        &format!(
-                                                            "SEARCH {}",
-                                                            query
-                                                        ),
-                                                    );
-                                                    let result_count =
-                                                        fetched.len();
-                                                    search_results =
-                                                        if fetched.is_empty() {
-                                                            vec![TrackItem {
-                                                                id: String::new(),
-                                                                name: "No search results"
-                                                                    .to_string(),
-                                                                artist:
-                                                                    String::new(),
-                                                            }]
-                                                        } else {
-                                                            fetched
-                                                        };
-                                                    search_scroll = 0;
-                                                    search_selected = None;
-                                                    app_view =
-                                                        AppView::SearchResults;
+                                                    let (sender, receiver) =
+                                                        std::sync::mpsc::channel();
+                                                    std::thread::spawn(move || {
+                                                        let fetched = daemon_query(
+                                                            &format!(
+                                                                "SEARCH {}",
+                                                                query
+                                                            ),
+                                                        );
+                                                        let _ = sender.send(fetched);
+                                                    });
+                                                    search_receiver =
+                                                        Some(receiver);
+                                                    search_in_progress = true;
                                                     dirty = true;
-                                                    eprintln!(
-                                                        "[poc] loaded {} search results",
-                                                        result_count
-                                                    );
                                                 }
                                             }
                                             _ => {}
@@ -4264,6 +4284,35 @@ BRIGHTNESS_LABELS[brightness_idx]
             }
         }
 
+        if search_in_progress {
+            let completed = search_receiver
+                .as_ref()
+                .and_then(|receiver| receiver.try_recv().ok());
+
+            if let Some(fetched) = completed {
+                let result_count = fetched.len();
+                search_results = if fetched.is_empty() {
+                    vec![TrackItem {
+                        id: String::new(),
+                        name: "No search results".to_string(),
+                        artist: String::new(),
+                    }]
+                } else {
+                    fetched
+                };
+                search_scroll = 0;
+                search_selected = None;
+                search_in_progress = false;
+                search_receiver = None;
+                app_view = AppView::SearchResults;
+                dirty = true;
+                eprintln!(
+                    "[poc] loaded {} search results",
+                    result_count
+                );
+            }
+        }
+
 // If we haven't loaded real tracks yet (daemon wasn't ready at
         // startup), retry the LIKED fetch every ~2s until it succeeds. This
         // makes the UI robust to being launched before the daemon is up.
@@ -4796,6 +4845,7 @@ BRIGHTNESS_LABELS[brightness_idx]
                 &playlist_tracks,
                 &search_results,
                 &search_query,
+                search_in_progress,
                 up_next_page.as_ref(),
                 scroll,
                 playlist_scroll,
