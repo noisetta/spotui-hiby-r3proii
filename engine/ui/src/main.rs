@@ -290,6 +290,52 @@ enum PlaybackState {
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum StartupStage {
+    Wifi,
+    Spotify,
+    Library,
+}
+
+impl StartupStage {
+    fn label(self) -> &'static str {
+        match self {
+            Self::Wifi => "Starting Wi-Fi",
+            Self::Spotify => "Connecting to Spotify",
+            Self::Library => "Loading Liked Songs",
+        }
+    }
+
+    fn detail(self) -> &'static str {
+        match self {
+            Self::Wifi => "Preparing the network connection",
+            Self::Spotify => "Signing in and starting playback",
+            Self::Library => "Fetching your saved tracks",
+        }
+    }
+
+    fn progress_width(self) -> u32 {
+        match self {
+            Self::Wifi => 120,
+            Self::Spotify => 240,
+            Self::Library => 360,
+        }
+    }
+}
+
+fn wifi_has_default_route() -> bool {
+    std::fs::read_to_string("/proc/net/route")
+        .ok()
+        .map(|routes| {
+            routes.lines().skip(1).any(|line| {
+                let mut fields = line.split_whitespace();
+                fields.next() == Some("wlan0")
+                    && fields.next() == Some("00000000")
+            })
+        })
+        .unwrap_or(false)
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum RepeatMode {
     Off,
     All,
@@ -1751,6 +1797,7 @@ fn draw_list(
     memory_available_mb: Option<u64>,
     brightness_idx: usize,
     playback_state: PlaybackState,
+    startup_stage: Option<StartupStage>,
     playback_modes: PlaybackModes,
     now_playing: Option<&NowPlaying>,
     playback_position: Option<u32>,
@@ -1794,7 +1841,10 @@ fn draw_list(
         .draw(fb)
         .ok();
     let header_style = MonoTextStyle::new(&FONT_9X15_BOLD, palette.header_text);
-    let header_title = match app_view {
+    let header_title = if startup_stage.is_some() {
+        "SpotUI"
+    } else {
+        match app_view {
         AppView::Library => title,
         AppView::Playlists => "Playlists",
         AppView::PlaylistTracks => "Playlist",
@@ -1805,6 +1855,7 @@ fn draw_list(
         AppView::Appearance => "Appearance",
         AppView::Special => "Appearance 2",
         AppView::Diagnostics => "Diagnostics",
+        }
     };
 
     Text::with_baseline(
@@ -1816,13 +1867,17 @@ fn draw_list(
     .draw(fb)
     .ok();
 
-    let playback_status = match playback_state {
+    let playback_status = if startup_stage.is_some() {
+        "Starting"
+    } else {
+        match playback_state {
         PlaybackState::Unknown => "Connecting",
         PlaybackState::Stopped => "Stopped",
         PlaybackState::Loading => "Loading",
         PlaybackState::Playing => "Playing",
         PlaybackState::Paused => "Paused",
         PlaybackState::Error => "Error",
+        }
     };
     let playback_status_x =
         (WIDTH as i32 - playback_status.chars().count() as i32 * 9) / 2;
@@ -1848,6 +1903,77 @@ fn draw_list(
     )
     .draw(fb)
     .ok();
+
+    if let Some(stage) = startup_stage {
+        Rectangle::new(
+            Point::new(0, 40),
+            Size::new(WIDTH as u32, (HEIGHT - 40) as u32),
+        )
+        .into_styled(PrimitiveStyle::with_fill(palette.background))
+        .draw(fb)
+        .ok();
+
+        let logo = "SpotUI";
+        let logo_x = (WIDTH as i32 - logo.len() as i32 * 9) / 2;
+        Text::with_baseline(
+            logo,
+            Point::new(logo_x, 190),
+            MonoTextStyle::new(&FONT_9X15_BOLD, palette.text),
+            Baseline::Top,
+        )
+        .draw(fb)
+        .ok();
+
+        let stage_label = stage.label();
+        let stage_x =
+            (WIDTH as i32 - stage_label.chars().count() as i32 * 9) / 2;
+        Text::with_baseline(
+            stage_label,
+            Point::new(stage_x, 275),
+            MonoTextStyle::new(&FONT_9X15_BOLD, palette.text),
+            Baseline::Top,
+        )
+        .draw(fb)
+        .ok();
+
+        let detail = stage.detail();
+        let detail_x =
+            (WIDTH as i32 - detail.chars().count() as i32 * 9) / 2;
+        Text::with_baseline(
+            detail,
+            Point::new(detail_x, 310),
+            MonoTextStyle::new(&FONT_9X15, palette.text),
+            Baseline::Top,
+        )
+        .draw(fb)
+        .ok();
+
+        Rectangle::new(Point::new(60, 365), Size::new(360, 8))
+            .into_styled(PrimitiveStyle::with_fill(
+                palette.progress_track,
+            ))
+            .draw(fb)
+            .ok();
+        Rectangle::new(
+            Point::new(60, 365),
+            Size::new(stage.progress_width(), 8),
+        )
+        .into_styled(PrimitiveStyle::with_fill(palette.progress_fill))
+        .draw(fb)
+        .ok();
+
+        Text::with_baseline(
+            "Please wait",
+            Point::new(190, 405),
+            MonoTextStyle::new(&FONT_9X15, palette.text),
+            Baseline::Top,
+        )
+        .draw(fb)
+        .ok();
+
+        fb.flush().ok();
+        return;
+    }
 
     let text_style = MonoTextStyle::new(&FONT_9X15, palette.text);
     let sel_style =
@@ -2615,6 +2741,13 @@ fn main() {
     eprintln!("[poc] fetching liked songs...");
     let mut items: Vec<TrackItem> = daemon_query("LIKED");
     let mut tracks_loaded = !items.is_empty();
+    let mut startup_stage = if tracks_loaded {
+        None
+    } else if wifi_has_default_route() {
+        Some(StartupStage::Spotify)
+    } else {
+        Some(StartupStage::Wifi)
+    };
     if tracks_loaded {
         eprintln!("[poc] loaded {} liked tracks", items.len());
     } else {
@@ -2684,6 +2817,7 @@ fn main() {
         memory_available_mb,
         brightness_idx,
         playback_state,
+        startup_stage,
         playback_modes,
         now_playing.as_ref(),
         playback_position,
@@ -3808,10 +3942,28 @@ BRIGHTNESS_LABELS[brightness_idx]
         // makes the UI robust to being launched before the daemon is up.
         if !tracks_loaded && last_liked_retry.elapsed().as_millis() >= 2000 {
             last_liked_retry = std::time::Instant::now();
+            let updated_stage = if !wifi_has_default_route() {
+                StartupStage::Wifi
+            } else if daemon_playback_state().is_some() {
+                StartupStage::Library
+            } else {
+                StartupStage::Spotify
+            };
+
+            if startup_stage != Some(updated_stage) {
+                startup_stage = Some(updated_stage);
+                dirty = true;
+                eprintln!(
+                    "[poc] startup stage -> {:?}",
+                    updated_stage
+                );
+            }
+
             let fetched = daemon_query("LIKED");
             if !fetched.is_empty() {
                 items = fetched;
-                            tracks_loaded = true;
+                tracks_loaded = true;
+                startup_stage = None;
                 scroll = 0;
                 selected = None;
                 dirty = true;
@@ -4293,6 +4445,7 @@ BRIGHTNESS_LABELS[brightness_idx]
                 memory_available_mb,
                 brightness_idx,
                 playback_state,
+                startup_stage,
                 playback_modes,
                 now_playing.as_ref(),
                 playback_position,
