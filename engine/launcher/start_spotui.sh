@@ -36,10 +36,10 @@ echo "[start] SpotUI launcher"
 # until reboot. Require a minimum uptime plus stable HiBy, framebuffer, ALSA,
 # mixer-control, and mixer-state signals before taking over.
 #
-# The 60-second limit remains only as a fallback if readiness cannot be
+# The 90-second limit remains only as a fallback if readiness cannot be
 # established. The detached entry-point keeps HiBy responsive while waiting.
-MIN_UPTIME=20
-FALLBACK_UPTIME=60
+MIN_UPTIME=60
+FALLBACK_UPTIME=90
 READY_STREAK_REQUIRED=3
 
 ready_streak=0

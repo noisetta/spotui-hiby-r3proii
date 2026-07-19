@@ -315,6 +315,8 @@ async fn main() {
     let mut player_events = player.get_player_event_channel();
 
     tokio::spawn(async move {
+        let mut consecutive_unavailable: u8 = 0;
+
         while let Some(event) = player_events.recv().await {
             if let PlayerEvent::EndOfTrack { track_id, .. } = &event {
                 let ended_id = spotify_track_base62(track_id);
@@ -441,12 +443,32 @@ async fn main() {
                 }
             }
 
+            if matches!(&event, PlayerEvent::Playing { .. }) {
+                if consecutive_unavailable > 0 {
+                    eprintln!(
+                        "[spotui] playback recovered; unavailable counter reset"
+                    );
+                }
+                consecutive_unavailable = 0;
+            }
+
             if matches!(&event, PlayerEvent::Unavailable { .. }) {
+                consecutive_unavailable =
+                    consecutive_unavailable.saturating_add(1);
+
+                if consecutive_unavailable >= 2 {
+                    *event_state.write().await = "ERROR";
+                    eprintln!(
+                        "[spotui] repeated unavailable tracks without successful playback; exiting for supervised recovery"
+                    );
+                    exit(75);
+                }
+
                 *event_playback_queue.write().await =
                     PlaybackQueue::default();
                 event_player.stop();
                 eprintln!(
-                    "[spotui] unavailable track; cleared queue and reset player"
+                    "[spotui] unavailable track 1/2; cleared queue and reset player"
                 );
             }
 

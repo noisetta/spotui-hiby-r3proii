@@ -1586,6 +1586,7 @@ fn draw_now_playing_strip(
     fb: &mut Framebuffer,
     now_playing: Option<&NowPlaying>,
     playback_position: Option<u32>,
+    playback_state: PlaybackState,
     palette: &Palette,
 ) {
     let text_style =
@@ -1710,8 +1711,13 @@ fn draw_now_playing_strip(
             }
         }
         None => {
+            let empty_label = match playback_state {
+                PlaybackState::Unknown => "Reconnecting...",
+                PlaybackState::Error => "Playback error",
+                _ => "Nothing playing",
+            };
             Text::with_baseline(
-                "Nothing playing",
+                empty_label,
                 Point::new(10, now_playing_y + 22),
                 text_style,
                 Baseline::Top,
@@ -2380,6 +2386,7 @@ fn draw_list(
         fb,
         now_playing,
         playback_position,
+        playback_state,
         palette,
     );
 
@@ -2758,6 +2765,7 @@ fn main() {
     let mut last_port: Option<u8> = initial_port;
     let mut last_liked_retry = std::time::Instant::now();
     let mut last_status_check = std::time::Instant::now();
+    let mut consecutive_status_failures: u8 = 0;
     let mut last_battery_check = std::time::Instant::now();
     let mut last_storage_check = std::time::Instant::now();
     let mut last_memory_check = std::time::Instant::now();
@@ -3816,11 +3824,34 @@ BRIGHTNESS_LABELS[brightness_idx]
         if last_status_check.elapsed().as_millis() >= 1000 {
             last_status_check = std::time::Instant::now();
 
-            if let Some(updated_state) = daemon_playback_state() {
-                if updated_state != playback_state {
-                    playback_state = updated_state;
-                    dirty = true;
-                    eprintln!("[poc] playback state -> {:?}", playback_state);
+            match daemon_playback_state() {
+                Some(updated_state) => {
+                    consecutive_status_failures = 0;
+                    if updated_state != playback_state {
+                        playback_state = updated_state;
+                        dirty = true;
+                        eprintln!(
+                            "[poc] playback state -> {:?}",
+                            playback_state
+                        );
+                    }
+                }
+                None => {
+                    consecutive_status_failures =
+                        consecutive_status_failures.saturating_add(1);
+
+                    if consecutive_status_failures >= 2
+                        && playback_state != PlaybackState::Unknown
+                    {
+                        playback_state = PlaybackState::Unknown;
+                        now_playing = None;
+                        playback_position = None;
+                        pending_queue_selection = None;
+                        dirty = true;
+                        eprintln!(
+                            "[poc] daemon unavailable -> reconnecting"
+                        );
+                    }
                 }
             }
 
@@ -4289,6 +4320,7 @@ BRIGHTNESS_LABELS[brightness_idx]
                 &mut fb,
                 now_playing.as_ref(),
                 playback_position,
+                playback_state,
                 &palette,
             );
 
