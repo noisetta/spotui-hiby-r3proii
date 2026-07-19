@@ -235,7 +235,7 @@ fn daemon_request(cmd: &str) -> Option<String> {
     s.write_all(cmd.as_bytes()).ok()?;
     s.write_all(&[10]).ok()?;
 
-    let mut buf = [0u8; 128];
+    let mut buf = [0u8; 1024];
     let read = s.read(&mut buf).ok()?;
 
     if read == 0 {
@@ -430,6 +430,22 @@ struct QueueStatus {
     track_id: String,
 }
 
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct QueuePageItem {
+    position: usize,
+    source_index: usize,
+    track_id: String,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct QueuePage {
+    source: QueueSource,
+    current_position: usize,
+    total: usize,
+    start: usize,
+    items: Vec<QueuePageItem>,
+}
+
 struct PendingQueueSelection {
     source: QueueSource,
     track_id: String,
@@ -503,6 +519,91 @@ fn daemon_queue_status() -> Option<Option<QueueStatus>> {
         index,
         length,
         track_id,
+    }))
+}
+
+fn daemon_queue_page(offset: usize) -> Option<Option<QueuePage>> {
+    let reply = daemon_request(&format!(
+        "QUEUE_PAGE {} {}",
+        offset, VISIBLE_ROWS
+    ))?;
+
+    if reply == "QUEUE_PAGE NONE" {
+        return Some(None);
+    }
+
+    let mut lines = reply.lines();
+    let header = lines.next()?;
+    let mut fields = header.split_whitespace();
+
+    if fields.next() != Some("QUEUE_PAGE") {
+        return None;
+    }
+
+    let source_field = fields.next()?;
+    let source = if source_field == "LIKED" {
+        QueueSource::Liked
+    } else if source_field == "SEARCH" {
+        QueueSource::Search
+    } else if let Some(playlist_id) =
+        source_field.strip_prefix("PLAYLIST:")
+    {
+        if playlist_id.is_empty() {
+            return None;
+        }
+        QueueSource::Playlist(playlist_id.to_string())
+    } else {
+        return None;
+    };
+
+    let _request_id = fields.next()?.parse::<u64>().ok()?;
+    let current_position = fields.next()?.parse::<usize>().ok()?;
+    let total = fields.next()?.parse::<usize>().ok()?;
+    let start = fields.next()?.parse::<usize>().ok()?;
+    let count = fields.next()?.parse::<usize>().ok()?;
+
+    if fields.next().is_some()
+        || current_position >= total
+        || start > total
+        || count > VISIBLE_ROWS
+    {
+        return None;
+    }
+
+    let mut items = Vec::with_capacity(count);
+    for line in lines {
+        let mut item_fields = line.split_whitespace();
+        if item_fields.next() != Some("ITEM") {
+            return None;
+        }
+        let position = item_fields.next()?.parse::<usize>().ok()?;
+        let source_index = item_fields.next()?.parse::<usize>().ok()?;
+        let track_id = item_fields.next()?.to_string();
+
+        if item_fields.next().is_some()
+            || track_id.is_empty()
+            || position >= total
+        {
+            return None;
+        }
+
+        items.push(QueuePageItem {
+            position,
+            source_index,
+            track_id,
+        });
+    }
+
+    if items.len() != count {
+        return None;
+    }
+
+    Some(Some(QueuePage {
+        source,
+        current_position,
+        total,
+        start,
+        items,
     }))
 }
 
@@ -916,6 +1017,7 @@ enum AppView {
     SearchResults,
     Menu,
     Sound,
+    UpNext,
     Appearance,
     Special,
     Diagnostics,
@@ -1004,7 +1106,7 @@ const SOUND_LABELS: [&str; 6] = [
     "Repeat Off",
     "Repeat All",
     "Repeat One",
-    "Scope: All",
+    "Up Next",
     "Back",
 ];
 
@@ -1783,6 +1885,7 @@ fn draw_list(
     playlist_tracks: &[TrackItem],
     search_results: &[TrackItem],
     search_query: &str,
+    up_next_page: Option<&QueuePage>,
     scroll: usize,
     playlist_scroll: usize,
     playlist_track_scroll: usize,
@@ -1852,6 +1955,7 @@ fn draw_list(
         AppView::SearchResults => "Search Results",
         AppView::Menu => "More",
         AppView::Sound => "Sound",
+        AppView::UpNext => "Up Next",
         AppView::Appearance => "Appearance",
         AppView::Special => "Appearance 2",
         AppView::Diagnostics => "Diagnostics",
@@ -2003,6 +2107,14 @@ fn draw_list(
                 .min(search_results.len());
             (search_scroll, search_results.len(), end)
         }
+        AppView::UpNext => match up_next_page {
+            Some(page) => (
+                page.start,
+                page.total,
+                page.start + page.items.len(),
+            ),
+            None => (0, 0, 0),
+        },
         _ => (0, 0, 0),
     };
 
@@ -2239,6 +2351,86 @@ fn draw_list(
                 .ok();
             }
         }
+        AppView::UpNext => {
+            if let Some(page) = up_next_page {
+                for (row, queued) in page.items.iter().enumerate() {
+                    let source_items = match &page.source {
+                        QueueSource::Liked => items,
+                        QueueSource::Playlist(_) => playlist_tracks,
+                        QueueSource::Search => search_results,
+                    };
+                    let track = source_items
+                        .get(queued.source_index)
+                        .filter(|item| item.id == queued.track_id)
+                        .or_else(|| {
+                            source_items.iter().find(|item| {
+                                item.id == queued.track_id
+                            })
+                        });
+                    let track_label = track
+                        .map(TrackItem::label)
+                        .unwrap_or_else(|| queued.track_id.clone());
+                    let label = truncate_label(
+                        &format!(
+                            "{}. {}",
+                            queued.position + 1,
+                            track_label
+                        ),
+                        48,
+                    );
+                    let y = 40 + row as i32 * ROW_HEIGHT;
+                    let is_current =
+                        queued.position == page.current_position;
+
+                    if is_current {
+                        Rectangle::new(
+                            Point::new(0, y),
+                            Size::new(WIDTH as u32, ROW_HEIGHT as u32),
+                        )
+                        .into_styled(PrimitiveStyle::with_fill(
+                            palette.selected_row,
+                        ))
+                        .draw(fb)
+                        .ok();
+
+                        Text::with_baseline(
+                            &format!("> {}", label),
+                            Point::new(10, y + 22),
+                            sel_style,
+                            Baseline::Top,
+                        )
+                        .draw(fb)
+                        .ok();
+                    } else {
+                        Text::with_baseline(
+                            &label,
+                            Point::new(10, y + 22),
+                            text_style,
+                            Baseline::Top,
+                        )
+                        .draw(fb)
+                        .ok();
+                    }
+
+                    Rectangle::new(
+                        Point::new(0, y + ROW_HEIGHT - 1),
+                        Size::new(WIDTH as u32, 1),
+                    )
+                    .into_styled(PrimitiveStyle::with_fill(palette.border))
+                    .draw(fb)
+                    .ok();
+                }
+            } else {
+                Text::with_baseline(
+                    "No active queue",
+                    Point::new(10, 62),
+                    text_style,
+                    Baseline::Top,
+                )
+                .draw(fb)
+                .ok();
+            }
+        }
         AppView::SearchInput => {
             Rectangle::new(
                 Point::new(0, 40),
@@ -2334,6 +2526,7 @@ fn draw_list(
             | AppView::Playlists
             | AppView::PlaylistTracks
             | AppView::SearchResults
+            | AppView::UpNext
     ) && list_scroll > 0
     {
         Text::with_baseline(
@@ -2352,6 +2545,7 @@ fn draw_list(
             | AppView::Playlists
             | AppView::PlaylistTracks
             | AppView::SearchResults
+            | AppView::UpNext
     ) && list_end < list_length
     {
         Text::with_baseline(
@@ -2371,7 +2565,8 @@ fn draw_list(
         | AppView::Playlists
         | AppView::PlaylistTracks
         | AppView::SearchInput
-        | AppView::SearchResults => None,
+        | AppView::SearchResults
+        | AppView::UpNext => None,
         AppView::Menu => Some(&MENU_LABELS),
         AppView::Sound => Some(&SOUND_LABELS),
         AppView::Appearance => Some(&APPEARANCE_LABELS),
@@ -2450,6 +2645,7 @@ fn draw_list(
                 | AppView::PlaylistTracks
                 | AppView::SearchInput
                 | AppView::SearchResults
+                | AppView::UpNext
                 | AppView::Menu
                 | AppView::Diagnostics => false,
             };
@@ -2553,7 +2749,8 @@ fn draw_list(
         AppView::Playlists
         | AppView::PlaylistTracks
         | AppView::SearchInput
-        | AppView::SearchResults => "Back",
+        | AppView::SearchResults
+        | AppView::UpNext => "Back",
         AppView::Menu
         | AppView::Sound
         | AppView::Appearance
@@ -2769,6 +2966,8 @@ fn main() {
     let mut search_results: Vec<TrackItem> = Vec::new();
     let mut search_selected: Option<usize> = None;
     let mut search_scroll: usize = 0;
+    let mut up_next_page: Option<QueuePage> = None;
+    let mut up_next_offset: usize = 0;
 
     let mut brightness_idx: usize = load_brightness_idx();
     let mut selected: Option<usize> = None;
@@ -2803,6 +3002,7 @@ fn main() {
         &playlist_tracks,
         &search_results,
         &search_query,
+        up_next_page.as_ref(),
         scroll,
         playlist_scroll,
         playlist_track_scroll,
@@ -3035,6 +3235,36 @@ fn main() {
                                                 search_scroll
                                             );
                                         }
+                                        AppView::UpNext => {
+                                            let total = up_next_page
+                                                .as_ref()
+                                                .map(|page| page.total)
+                                                .unwrap_or(0);
+                                            let max_offset = total
+                                                .saturating_sub(1)
+                                                / VISIBLE_ROWS
+                                                * VISIBLE_ROWS;
+
+                                            if cur_x < WIDTH as i32 - 120 {
+                                                up_next_offset = up_next_offset
+                                                    .saturating_sub(VISIBLE_ROWS);
+                                            } else {
+                                                up_next_offset =
+                                                    (up_next_offset + VISIBLE_ROWS)
+                                                        .min(max_offset);
+                                            }
+
+                                            if let Some(updated) =
+                                                daemon_queue_page(up_next_offset)
+                                            {
+                                                up_next_page = updated;
+                                                dirty = true;
+                                            }
+                                            eprintln!(
+                                                "[poc] up next offset -> {}",
+                                                up_next_offset
+                                            );
+                                        }
                                         _ => {}
                                     }
                                 } else if cur_y >= TOOLBAR_TOP {
@@ -3092,6 +3322,7 @@ fn main() {
                                                 }
                                                 AppView::Menu => AppView::Library,
                                                 AppView::Sound => AppView::Menu,
+                                                AppView::UpNext => AppView::Sound,
                                                 AppView::Appearance => AppView::Menu,
                                                 AppView::Special => AppView::Appearance,
                                                 AppView::Diagnostics => AppView::Menu,
@@ -3316,7 +3547,8 @@ fn main() {
                                         | AppView::Playlists
                                         | AppView::PlaylistTracks
                                         | AppView::SearchInput
-                                        | AppView::SearchResults => &MENU_LABELS,
+                                        | AppView::SearchResults
+                                        | AppView::UpNext => &MENU_LABELS,
                                         };
 
                                     if let Some(label) =
@@ -3471,6 +3703,33 @@ fn main() {
                                                 if menu_index == 5 {
                                                     app_view = AppView::Menu;
                                                     dirty = true;
+                                                } else if menu_index == 4 {
+                                                    let first_page =
+                                                        daemon_queue_page(0)
+                                                            .flatten();
+                                                    up_next_offset = first_page
+                                                        .as_ref()
+                                                        .map(|page| {
+                                                            page.current_position
+                                                                / VISIBLE_ROWS
+                                                                * VISIBLE_ROWS
+                                                        })
+                                                        .unwrap_or(0);
+                                                    up_next_page =
+                                                        if up_next_offset > 0 {
+                                                            daemon_queue_page(
+                                                                up_next_offset,
+                                                            )
+                                                            .flatten()
+                                                        } else {
+                                                            first_page
+                                                        };
+                                                    app_view = AppView::UpNext;
+                                                    dirty = true;
+                                                    eprintln!(
+                                                        "[poc] app view -> {:?}",
+                                                        app_view
+                                                    );
                                                 } else if let Some(command) = command {
                                                     if daemon_request(&command)
                                                         .map(|reply| {
@@ -3563,7 +3822,8 @@ fn main() {
                                             | AppView::Playlists
                                             | AppView::PlaylistTracks
                                             | AppView::SearchInput
-                                            | AppView::SearchResults => {}
+                                            | AppView::SearchResults
+                                            | AppView::UpNext => {}
                                         }
                                     }
                                 } else if app_view
@@ -4283,6 +4543,30 @@ BRIGHTNESS_LABELS[brightness_idx]
                 }
             }
 
+            if app_view == AppView::UpNext {
+                if let Some(mut updated_page) =
+                    daemon_queue_page(up_next_offset)
+                {
+                    if let Some(page) = updated_page.as_ref() {
+                        let page_end = page.start + page.items.len();
+                        if page.current_position < page.start
+                            || page.current_position >= page_end
+                        {
+                            up_next_offset = page.current_position
+                                / VISIBLE_ROWS
+                                * VISIBLE_ROWS;
+                            updated_page = daemon_queue_page(up_next_offset)
+                                .flatten();
+                        }
+                    }
+
+                    if updated_page != up_next_page {
+                        up_next_page = updated_page;
+                        dirty = true;
+                    }
+                }
+            }
+
         }
 
         // Refresh the battery value every 30 seconds.
@@ -4431,6 +4715,7 @@ BRIGHTNESS_LABELS[brightness_idx]
                 &playlist_tracks,
                 &search_results,
                 &search_query,
+                up_next_page.as_ref(),
                 scroll,
                 playlist_scroll,
                 playlist_track_scroll,

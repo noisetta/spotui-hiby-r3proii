@@ -23,6 +23,8 @@
 //   PREVIOUS                 -> manually go back in the active queue
 //   STATUS                   -> report current playback state
 //   QUEUE_STATUS             -> report the active queue position
+//   QUEUE_PAGE <offset> <limit>
+//                            -> page through the active play order
 //   PLAYBACK_MODES           -> report shuffle and repeat modes
 //   SET_SHUFFLE <ON|OFF>     -> persist and apply shuffle mode
 //   SET_REPEAT <OFF|ALL|ONE> -> persist and apply repeat mode
@@ -1374,6 +1376,79 @@ async fn handle_conn<R, W>(
                         track_id
                     ),
                     _ => "QUEUE NONE\n".to_string(),
+                }
+            }
+            "QUEUE_PAGE" => {
+                let mut args = arg.split_whitespace();
+                let offset = args.next().and_then(|value| {
+                    value.parse::<usize>().ok()
+                });
+                let limit = args.next().and_then(|value| {
+                    value.parse::<usize>().ok()
+                });
+                let has_extra_args = args.next().is_some();
+
+                if offset.is_none()
+                    || limit.is_none()
+                    || has_extra_args
+                    || limit == Some(0)
+                    || limit.unwrap_or(0) > 9
+                {
+                    "ERR QUEUE_PAGE needs offset and limit 1-9\n"
+                        .to_string()
+                } else {
+                    let offset = offset.unwrap();
+                    let limit = limit.unwrap();
+                    let queue = playback_queue.read().await;
+
+                    match (
+                        queue.source.as_ref(),
+                        queue.order_position,
+                    ) {
+                        (Some(source), Some(current_position))
+                            if !queue.play_order.is_empty() =>
+                        {
+                            let total = queue.play_order.len();
+                            let start = offset.min(total);
+                            let end = (start + limit).min(total);
+                            let source_label = match source {
+                                QueueSource::Liked => "LIKED".to_string(),
+                                QueueSource::Playlist(playlist_id) => {
+                                    format!("PLAYLIST:{}", playlist_id)
+                                }
+                                QueueSource::Search => "SEARCH".to_string(),
+                            };
+                            let mut response = format!(
+                                "QUEUE_PAGE {} {} {} {} {} {}\n",
+                                source_label,
+                                queue.request_id,
+                                current_position,
+                                total,
+                                start,
+                                end - start
+                            );
+
+                            for position in start..end {
+                                if let Some(source_index) =
+                                    queue.play_order.get(position).copied()
+                                {
+                                    if let Some(track_id) =
+                                        queue.track_ids.get(source_index)
+                                    {
+                                        response.push_str(&format!(
+                                            "ITEM {} {} {}\n",
+                                            position,
+                                            source_index,
+                                            track_id
+                                        ));
+                                    }
+                                }
+                            }
+
+                            response
+                        }
+                        _ => "QUEUE_PAGE NONE\n".to_string(),
+                    }
                 }
             }
             "NOW_PLAYING" => {
