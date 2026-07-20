@@ -253,8 +253,8 @@ The developer preview currently has these installation limitations:
 - no guided Spotify authentication flow is included;
 - Like/unlike library writes are unavailable because they require a separate
   Spotify Web API OAuth authorization;
-- screen sleep is not yet implemented, so the panel remains active while
-  SpotUI is running;
+- screen sleep currently uses a fixed 60-second idle timeout; configurable
+  intervals and hardware power-button wake are not yet implemented;
 - the stock launcher handoff may take tens of seconds before SpotUI can draw
   its own loading page;
 - no automatic updater or uninstaller exists;

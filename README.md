@@ -31,6 +31,7 @@ Current device-side features include:
 - Pause, resume, and touchscreen progress seeking
 - Fixed bottom toolbar with Exit, Brightness, Pause/Resume, and navigation controls
 - Persistent brightness selection
+- Automatic 60-second screen sleep with touch wake and saved-brightness restore
 - Battery percentage display
 - Automatic 3.5 mm and 4.4 mm output routing
 - Automatic pause when the active headphone output is disconnected

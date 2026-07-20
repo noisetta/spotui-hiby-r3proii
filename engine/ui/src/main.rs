@@ -53,6 +53,7 @@ const ABS_MT_POSITION_Y: u16 = 0x36;
 const SYN_REPORT: u16 = 0x00;
 const VOLUME_POPUP_MS: u128 = 1800;
 const AMBIENT_IDLE_MS: u128 = 2000;
+const SCREEN_SLEEP_MS: u128 = 60_000;
 
 // ---- Backlight ----------------------------------------------------------
 const BL_BRIGHTNESS: &str = "/sys/class/backlight/backlight_pwm0/brightness";
@@ -3175,6 +3176,7 @@ fn main() {
     let mut last_memory_check = std::time::Instant::now();
     let mut last_static_refresh = std::time::Instant::now();
     let mut last_user_input = std::time::Instant::now();
+    let mut screen_asleep = false;
     let startup_time = std::time::Instant::now();
     let mut startup_brightness_applied = false;
     let mut volume_popup:
@@ -3205,6 +3207,22 @@ fn main() {
                         }
                         EV_SYN => {
                             if code == SYN_REPORT && touch_down {
+                                if screen_asleep {
+                                    screen_asleep = false;
+                                    last_user_input =
+                                        std::time::Instant::now();
+                                    panel_wake(fb.file.as_raw_fd());
+                                    apply_brightness(brightness_idx);
+                                    fb.flush().ok();
+                                    last_flush =
+                                        std::time::Instant::now();
+                                    touch_down = false;
+                                    eprintln!(
+                                        "[poc] screen woke from touch"
+                                    );
+                                    continue;
+                                }
+
                                 last_user_input = std::time::Instant::now();
                                 // Header = page up; strip above toolbar = page down.
                                 // The bottom 60px are four equal-width controls.
@@ -4779,6 +4797,18 @@ BRIGHTNESS_LABELS[brightness_idx]
             dirty = true;
         }
 
+        if !screen_asleep
+            && startup_stage.is_none()
+            && last_user_input.elapsed().as_millis()
+                >= SCREEN_SLEEP_MS
+        {
+            write_sysfs(BL_BRIGHTNESS, "0");
+            screen_asleep = true;
+            dirty = false;
+            now_playing_dirty = false;
+            eprintln!("[poc] screen slept after idle timeout");
+        }
+
         // Re-check the output jack four times per second. Removing an active
         // output immediately requests a pause. Connecting a jack selects its
         // route but does not resume automatically.
@@ -4837,7 +4867,7 @@ BRIGHTNESS_LABELS[brightness_idx]
 
         // Re-render the whole interface only when global state changes.
         // Position and volume updates redraw just the 60-pixel track strip.
-        if dirty {
+        if !screen_asleep && dirty {
             draw_list(
                 &mut fb,
                 &items,
@@ -4886,7 +4916,7 @@ BRIGHTNESS_LABELS[brightness_idx]
             now_playing_dirty = false;
             last_flush = std::time::Instant::now();
             dirty = false;
-        } else if now_playing_dirty {
+        } else if !screen_asleep && now_playing_dirty {
             draw_now_playing_strip(
                 &mut fb,
                 now_playing.as_ref(),
@@ -4907,7 +4937,9 @@ BRIGHTNESS_LABELS[brightness_idx]
 
             now_playing_dirty = false;
             last_flush = std::time::Instant::now();
-        } else if last_flush.elapsed().as_millis() as u64 >= keepalive_ms {
+        } else if !screen_asleep
+            && last_flush.elapsed().as_millis() as u64 >= keepalive_ms
+        {
             // Keep the panel lit between changes with a periodic flush.
             fb.keepalive();
             last_flush = std::time::Instant::now();
