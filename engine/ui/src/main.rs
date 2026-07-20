@@ -38,6 +38,9 @@ const FB_FRAME_BYTES: usize = WIDTH * HEIGHT * BYTES_PER_PIXEL; // 691200
 
 // ---- Input constants (decoded from event1 capture) ----------------------
 const INPUT_PATH: &str = "/dev/input/event1";
+// The physical power button is KEY_POWER on event0 ("md-gpio-keys").
+const POWER_INPUT_PATH: &str = "/dev/input/event0";
+const KEY_POWER: u16 = 116;
 // Volume buttons live on event2 ("jz adc keyboard"). Decoded from capture:
 // KEY_VOLUMEUP = 0x73, KEY_VOLUMEDOWN = 0x72, value 1 = press.
 const VOL_INPUT_PATH: &str = "/dev/input/event2";
@@ -3341,6 +3344,26 @@ fn main() {
         }
     };
 
+    // Open the physical power button (event0), also non-blocking. SpotUI only
+    // uses it to wake an already sleeping screen; awake presses are ignored.
+    let mut power_input =
+        match OpenOptions::new().read(true).open(POWER_INPUT_PATH) {
+            Ok(f) => {
+                let fd = f.as_raw_fd();
+                unsafe {
+                    let flags = libc::fcntl(fd, libc::F_GETFL, 0);
+                    libc::fcntl(fd, libc::F_SETFL, flags | libc::O_NONBLOCK);
+                }
+                Some(f)
+            }
+            Err(e) => {
+                eprintln!(
+                    "[poc] cannot open {POWER_INPUT_PATH} (no power wake): {e}"
+                );
+                None
+            }
+        };
+
     let mut ev = [0u8; EVENT_SIZE];
     let mut cur_x: i32 = 0;
     let mut cur_y: i32 = 0;
@@ -4532,6 +4555,40 @@ fn main() {
                 }
                 Err(ref e) if e.kind() == std::io::ErrorKind::WouldBlock => break,
                 Err(_) => break,
+            }
+        }
+
+        // Drain physical power-button events (event0), if available. A press
+        // wakes only an asleep display and is never treated as a UI action.
+        if let Some(ref mut pin) = power_input {
+            loop {
+                match pin.read_exact(&mut ev) {
+                    Ok(()) => {
+                        let etype = le_u16(&ev[8..10]);
+                        let code = le_u16(&ev[10..12]);
+                        let value = le_i32(&ev[12..16]);
+
+                        if etype == EV_KEY
+                            && code == KEY_POWER
+                            && value == 1
+                            && screen_asleep
+                        {
+                            screen_asleep = false;
+                            last_user_input = std::time::Instant::now();
+                            panel_wake(fb.file.as_raw_fd());
+                            apply_brightness(brightness_idx);
+                            fb.flush().ok();
+                            last_flush = std::time::Instant::now();
+                            eprintln!("[poc] screen woke from power button");
+                        }
+                    }
+                    Err(ref e)
+                        if e.kind() == std::io::ErrorKind::WouldBlock =>
+                    {
+                        break;
+                    }
+                    Err(_) => break,
+                }
             }
         }
 

@@ -34,7 +34,8 @@ Current device-side features include:
 - Fixed bottom toolbar with Exit, Brightness, Pause/Resume, and navigation controls
 - Persistent brightness selection
 - Persistent screen-sleep settings for 30 seconds, 60 seconds, 2 minutes,
-  5 minutes, or Never, with safe touch wake and saved-brightness restore
+  5 minutes, or Never, with safe touch or power-button wake and
+  saved-brightness restore
 - Battery percentage display
 - Automatic 3.5 mm and 4.4 mm output routing
 - Automatic pause when the active headphone output is disconnected
