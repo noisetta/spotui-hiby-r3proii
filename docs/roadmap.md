@@ -15,6 +15,8 @@ SpotUI is currently an early developer preview source release for the HiBy R3 Pr
 - Added queued playback for Liked Songs, playlists, and search results.
 - Added latest-tap-wins track selection and responsive, tap-safe Search.
 - Added queue-aware Previous, Next, and Up Next controls.
+- Added a dedicated Now Playing screen with larger metadata, elapsed and
+  remaining time, seeking, playback controls, and direct queue access.
 - Added persistent shuffle and repeat modes.
 - Added touchscreen seeking and hardware volume feedback.
 - Added ten redesigned themes with adaptive ambient motion.
@@ -36,7 +38,6 @@ SpotUI is currently an early developer preview source release for the HiBy R3 Pr
 
 ## Current development priorities
 
-- Add a dedicated Now Playing screen with larger metadata and queue access.
 - Add a settings screen with configurable sleep intervals; separately
   investigate whether hardware power-button wake can be supported safely.
 - Keep public setup, recovery, and feature documentation synchronized with

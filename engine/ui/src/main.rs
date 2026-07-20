@@ -22,7 +22,7 @@ use std::{
 };
 
 use embedded_graphics::{
-    mono_font::{ascii::FONT_9X15, ascii::FONT_9X15_BOLD, MonoTextStyle},
+    mono_font::{ascii::FONT_10X20, ascii::FONT_9X15, ascii::FONT_9X15_BOLD, MonoTextStyle},
     pixelcolor::{Rgb565, WebColors},
     prelude::*,
     primitives::{Circle, Ellipse, PrimitiveStyle, Rectangle},
@@ -1038,6 +1038,7 @@ enum AppView {
     Menu,
     Sound,
     UpNext,
+    NowPlaying,
     Appearance,
     Special,
     Diagnostics,
@@ -1896,6 +1897,151 @@ fn draw_now_playing_strip(
     }
 }
 
+fn draw_now_playing_view(
+    fb: &mut Framebuffer,
+    now_playing: Option<&NowPlaying>,
+    playback_position: Option<u32>,
+    playback_state: PlaybackState,
+    palette: &Palette,
+) {
+    Rectangle::new(Point::new(0, 40), Size::new(WIDTH as u32, 620))
+        .into_styled(PrimitiveStyle::with_fill(palette.background))
+        .draw(fb)
+        .ok();
+
+    let title_style = MonoTextStyle::new(&FONT_10X20, palette.text);
+    let text_style = MonoTextStyle::new(&FONT_9X15, palette.text);
+    let button_style = MonoTextStyle::new(&FONT_9X15_BOLD, palette.text);
+
+    match now_playing {
+        Some(item) => {
+            let title = truncate_label(&item.title, 42);
+            let artist = truncate_label(
+                if item.artist.is_empty() {
+                    "Unknown artist"
+                } else {
+                    item.artist.as_str()
+                },
+                48,
+            );
+            let title_x = (WIDTH as i32 - title.chars().count() as i32 * 10) / 2;
+            let artist_x = (WIDTH as i32 - artist.chars().count() as i32 * 9) / 2;
+
+            Text::with_baseline(
+                &title,
+                Point::new(title_x.max(8), 145),
+                title_style,
+                Baseline::Top,
+            )
+            .draw(fb)
+            .ok();
+            Text::with_baseline(
+                &artist,
+                Point::new(artist_x.max(8), 190),
+                text_style,
+                Baseline::Top,
+            )
+            .draw(fb)
+            .ok();
+
+            let duration_ms = item.duration_ms;
+            let position_ms = playback_position.unwrap_or(0).min(duration_ms);
+            let elapsed = format_playback_time(position_ms);
+            let remaining = format!(
+                "-{}",
+                format_playback_time(duration_ms.saturating_sub(position_ms))
+            );
+
+            Text::with_baseline(
+                &elapsed,
+                Point::new(20, 322),
+                text_style,
+                Baseline::Top,
+            )
+            .draw(fb)
+            .ok();
+            Text::with_baseline(
+                &remaining,
+                Point::new(460 - remaining.chars().count() as i32 * 9, 322),
+                text_style,
+                Baseline::Top,
+            )
+            .draw(fb)
+            .ok();
+
+            Rectangle::new(Point::new(20, 300), Size::new(440, 10))
+                .into_styled(PrimitiveStyle::with_fill(palette.progress_track))
+                .draw(fb)
+                .ok();
+            if duration_ms > 0 {
+                let filled =
+                    (position_ms as u64 * 440 / duration_ms as u64) as u32;
+                if filled > 0 {
+                    Rectangle::new(Point::new(20, 300), Size::new(filled, 10))
+                        .into_styled(PrimitiveStyle::with_fill(palette.progress_fill))
+                        .draw(fb)
+                        .ok();
+                }
+            }
+        }
+        None => {
+            let label = match playback_state {
+                PlaybackState::Unknown => "Reconnecting...",
+                PlaybackState::Error => "Playback error",
+                _ => "Nothing playing",
+            };
+            let label_x = (WIDTH as i32 - label.chars().count() as i32 * 10) / 2;
+            Text::with_baseline(
+                label,
+                Point::new(label_x, 190),
+                title_style,
+                Baseline::Top,
+            )
+            .draw(fb)
+            .ok();
+        }
+    }
+
+    for x in [0, 160, 320] {
+        Rectangle::new(Point::new(x, 390), Size::new(160, 100))
+            .into_styled(PrimitiveStyle::with_fill(palette.now_playing))
+            .draw(fb)
+            .ok();
+    }
+    for x in [160, 320] {
+        Rectangle::new(Point::new(x, 390), Size::new(1, 100))
+            .into_styled(PrimitiveStyle::with_fill(palette.border))
+            .draw(fb)
+            .ok();
+    }
+
+    let middle_label = if playback_state.is_paused() { "Play" } else { "Pause" };
+    for (label, center_x) in [("Previous", 80), (middle_label, 240), ("Next", 400)] {
+        Text::with_baseline(
+            label,
+            Point::new(center_x - label.chars().count() as i32 * 9 / 2, 432),
+            button_style,
+            Baseline::Top,
+        )
+        .draw(fb)
+        .ok();
+    }
+
+    Rectangle::new(Point::new(40, 520), Size::new(400, 90))
+        .into_styled(PrimitiveStyle::with_fill(palette.now_playing))
+        .draw(fb)
+        .ok();
+    let queue_label = "View Up Next";
+    Text::with_baseline(
+        queue_label,
+        Point::new((WIDTH as i32 - queue_label.len() as i32 * 9) / 2, 558),
+        button_style,
+        Baseline::Top,
+    )
+    .draw(fb)
+    .ok();
+}
+
 /// Draw the track list with scrolling. `scroll` is the index of the first
 /// visible item; `selected` highlights one row (absolute index).
 fn draw_list(
@@ -1979,6 +2125,7 @@ fn draw_list(
         AppView::Menu => "More",
         AppView::Sound => "Sound",
         AppView::UpNext => "Up Next",
+        AppView::NowPlaying => "Now Playing",
         AppView::Appearance => "Appearance",
         AppView::Special => "Appearance 2",
         AppView::Diagnostics => "Diagnostics",
@@ -2454,6 +2601,15 @@ fn draw_list(
                 .ok();
             }
         }
+        AppView::NowPlaying => {
+            draw_now_playing_view(
+                fb,
+                now_playing,
+                playback_position,
+                playback_state,
+                palette,
+            );
+        }
         AppView::SearchInput => {
             Rectangle::new(
                 Point::new(0, 40),
@@ -2599,7 +2755,8 @@ fn draw_list(
         | AppView::PlaylistTracks
         | AppView::SearchInput
         | AppView::SearchResults
-        | AppView::UpNext => None,
+        | AppView::UpNext
+        | AppView::NowPlaying => None,
         AppView::Menu => Some(&MENU_LABELS),
         AppView::Sound => Some(&SOUND_LABELS),
         AppView::Appearance => Some(&APPEARANCE_LABELS),
@@ -2679,6 +2836,7 @@ fn draw_list(
                 | AppView::SearchInput
                 | AppView::SearchResults
                 | AppView::UpNext
+                | AppView::NowPlaying
                 | AppView::Menu
                 | AppView::Diagnostics => false,
             };
@@ -2765,23 +2923,25 @@ fn draw_list(
         }
     }
 
-    draw_now_playing_strip(
-        fb,
-        now_playing,
-        playback_position,
-        playback_state,
-        palette,
-    );
+    if app_view != AppView::NowPlaying {
+        draw_now_playing_strip(
+            fb,
+            now_playing,
+            playback_position,
+            playback_state,
+            palette,
+        );
 
-    // Non-interactive separator immediately above the toolbar.
-    let down_strip_y = HEIGHT as i32 - 80;
-    Rectangle::new(
-        Point::new(0, down_strip_y),
-        Size::new(WIDTH as u32, 20),
-    )
-    .into_styled(PrimitiveStyle::with_fill(palette.separator))
-    .draw(fb)
-    .ok();
+        // Non-interactive separator immediately above the toolbar.
+        let down_strip_y = HEIGHT as i32 - 80;
+        Rectangle::new(
+            Point::new(0, down_strip_y),
+            Size::new(WIDTH as u32, 20),
+        )
+        .into_styled(PrimitiveStyle::with_fill(palette.separator))
+        .draw(fb)
+        .ok();
+    }
 
     // Fixed four-button toolbar.
     let toolbar_y = HEIGHT as i32 - 60;
@@ -2811,7 +2971,8 @@ fn draw_list(
         | AppView::PlaylistTracks
         | AppView::SearchInput
         | AppView::SearchResults
-        | AppView::UpNext => "Back",
+        | AppView::UpNext
+        | AppView::NowPlaying => "Back",
         AppView::Menu
         | AppView::Sound
         | AppView::Appearance
@@ -3058,6 +3219,8 @@ fn main() {
     let mut animation_frame: u32 = 0;
     eprintln!("[poc] startup theme -> {}", theme.key());
     let mut app_view = AppView::Library;
+    let mut now_playing_return_view = AppView::Library;
+    let mut up_next_return_view = AppView::Sound;
     let mut exit_armed = false;
     let title = "Liked Songs";
     let mut battery_percent = read_battery_percent();
@@ -3419,7 +3582,10 @@ fn main() {
                                                 }
                                                 AppView::Menu => AppView::Library,
                                                 AppView::Sound => AppView::Menu,
-                                                AppView::UpNext => AppView::Sound,
+                                                AppView::UpNext => up_next_return_view,
+                                                AppView::NowPlaying => {
+                                                    now_playing_return_view
+                                                }
                                                 AppView::Appearance => AppView::Menu,
                                                 AppView::Special => AppView::Appearance,
                                                 AppView::Diagnostics => AppView::Menu,
@@ -3431,6 +3597,84 @@ fn main() {
                                             );
                                         }
                                         _ => {}
+                                    }
+                                } else if app_view == AppView::NowPlaying {
+                                    exit_armed = false;
+
+                                    if cur_y >= 275
+                                        && cur_y < 350
+                                        && cur_x >= 20
+                                        && cur_x <= 460
+                                    {
+                                        if let Some(item) = now_playing.as_ref() {
+                                            if item.duration_ms > 0 {
+                                                let target_ms = (
+                                                    (cur_x - 20) as u64
+                                                        * item.duration_ms as u64
+                                                        / 440
+                                                ) as u32;
+                                                daemon_send(&format!(
+                                                    "SEEK {}",
+                                                    target_ms
+                                                ));
+                                                playback_position = Some(target_ms);
+                                                dirty = true;
+                                                eprintln!(
+                                                    "[poc] now-playing view seek -> {} ms",
+                                                    target_ms
+                                                );
+                                            }
+                                        }
+                                    } else if cur_y >= 390 && cur_y < 490 {
+                                        if cur_x < 160 || cur_x >= 320 {
+                                            let command = if cur_x < 160 {
+                                                "PREVIOUS"
+                                            } else {
+                                                "NEXT"
+                                            };
+                                            let loaded = daemon_request(command)
+                                                .map(|reply| {
+                                                    reply.starts_with("OK loading ")
+                                                })
+                                                .unwrap_or(false);
+                                            if loaded {
+                                                playback_state = PlaybackState::Loading;
+                                                playback_position = Some(0);
+                                                dirty = true;
+                                                eprintln!(
+                                                    "[poc] now-playing view {} requested",
+                                                    command.to_lowercase()
+                                                );
+                                            }
+                                        } else {
+                                            if playback_state.is_paused() {
+                                                daemon_send("PLAY");
+                                                eprintln!("[poc] now-playing view resume");
+                                            } else {
+                                                daemon_send("PAUSE");
+                                                eprintln!("[poc] now-playing view pause");
+                                            }
+                                            dirty = true;
+                                        }
+                                    } else if cur_y >= 520 && cur_y < 640 {
+                                        let first_page = daemon_queue_page(0).flatten();
+                                        up_next_offset = first_page
+                                            .as_ref()
+                                            .map(|page| {
+                                                page.current_position
+                                                    / VISIBLE_ROWS
+                                                    * VISIBLE_ROWS
+                                            })
+                                            .unwrap_or(0);
+                                        up_next_page = if up_next_offset > 0 {
+                                            daemon_queue_page(up_next_offset).flatten()
+                                        } else {
+                                            first_page
+                                        };
+                                        up_next_return_view = AppView::NowPlaying;
+                                        app_view = AppView::UpNext;
+                                        dirty = true;
+                                        eprintln!("[poc] app view -> UpNext");
                                     }
                                 } else if cur_y >= DOWN_STRIP_TOP {
                                     // Separator area intentionally does nothing.
@@ -3504,6 +3748,15 @@ fn main() {
                                                 );
                                             }
                                         }
+                                    } else if cur_y < SEEK_HIT_TOP
+                                        && cur_x >= 80
+                                        && cur_x < 400
+                                        && now_playing.is_some()
+                                    {
+                                        now_playing_return_view = app_view;
+                                        app_view = AppView::NowPlaying;
+                                        dirty = true;
+                                        eprintln!("[poc] app view -> NowPlaying");
                                     }
                                 } else if app_view == AppView::SearchInput {
                                     exit_armed = false;
@@ -3641,7 +3894,8 @@ fn main() {
                                         | AppView::PlaylistTracks
                                         | AppView::SearchInput
                                         | AppView::SearchResults
-                                        | AppView::UpNext => &MENU_LABELS,
+                                        | AppView::UpNext
+                                        | AppView::NowPlaying => &MENU_LABELS,
                                         };
 
                                     if let Some(label) =
@@ -3800,6 +4054,7 @@ fn main() {
                                                     app_view = AppView::Menu;
                                                     dirty = true;
                                                 } else if menu_index == 4 {
+                                                    up_next_return_view = AppView::Sound;
                                                     let first_page =
                                                         daemon_queue_page(0)
                                                             .flatten();
@@ -3928,7 +4183,8 @@ fn main() {
                                             | AppView::PlaylistTracks
                                             | AppView::SearchInput
                                             | AppView::SearchResults
-                                            | AppView::UpNext => {}
+                                            | AppView::UpNext
+                                            | AppView::NowPlaying => {}
                                         }
                                     }
                                 } else if app_view
@@ -4863,6 +5119,14 @@ BRIGHTNESS_LABELS[brightness_idx]
 
                 last_port = detected;
             }
+        }
+
+        // The dedicated Now Playing view uses the whole content area, so its
+        // metadata and progress updates require a full view redraw. Other
+        // screens keep the cheaper strip-only update path.
+        if app_view == AppView::NowPlaying && now_playing_dirty {
+            dirty = true;
+            now_playing_dirty = false;
         }
 
         // Re-render the whole interface only when global state changes.

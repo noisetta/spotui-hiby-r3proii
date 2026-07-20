@@ -27,6 +27,8 @@ Current device-side features include:
 - On-device browsing and queued playback of Liked Songs and playlists
 - On-device track search with responsive, tap-safe result loading
 - Queue-aware Previous, Next, and Up Next views
+- Dedicated Now Playing screen with larger metadata, progress seeking,
+  playback controls, and direct Up Next access
 - Persistent shuffle, Repeat Off, Repeat All, and Repeat One modes
 - Pause, resume, and touchscreen progress seeking
 - Fixed bottom toolbar with Exit, Brightness, Pause/Resume, and navigation controls
