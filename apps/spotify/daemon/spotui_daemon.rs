@@ -52,6 +52,7 @@ use tokio::{
 };
 
 use librespot::{
+    audio::AudioFetchParams,
     core::{
         cache::Cache, config::SessionConfig, session::Session, spotify_id::SpotifyId, SpotifyUri,
     },
@@ -238,6 +239,16 @@ async fn main() {
     let mut player_config = PlayerConfig::default();
     player_config.position_update_interval = Some(Duration::from_secs(1));
     let audio_format = AudioFormat::default();
+
+    // The device's WiFi stream can pause for longer than librespot's default
+    // one-second startup read-ahead. Wait for two seconds of compressed audio
+    // before decoding starts so the pipe does not starve at track startup.
+    let mut audio_fetch_params = AudioFetchParams::default();
+    audio_fetch_params.read_ahead_before_playback = Duration::from_secs(2);
+    if AudioFetchParams::set(audio_fetch_params).is_err() {
+        eprintln!("[spotui] audio fetch parameters were already initialized");
+        exit(1);
+    }
 
     // --- Authentication (from cache, like our working setup) ---------------
     // Cache holds the OAuth credentials + volume on the persistent partition.
