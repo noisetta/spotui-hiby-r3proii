@@ -64,6 +64,13 @@ Use a reboot after restoring the files. Do not try to restart the stock `hiby_pl
 
 The current launcher uses a nonblocking wrapper and waits for the stock player, framebuffer, ALSA devices, mixer state, and minimum uptime to become ready.
 
+On a cold boot, continuing to see the responsive stock interface for tens of
+seconds after tapping SpotUI can be normal. Repeated taps are ignored by the
+launch lock. SpotUI cannot safely draw its own progress page until the stock
+player has completed audio initialization and released the framebuffer. Do not
+shorten the readiness gate merely to make the UI appear sooner: stopping the
+stock player early has caused silent headphone output that required a reboot.
+
 Inspect the startup logs:
 
 ```fish

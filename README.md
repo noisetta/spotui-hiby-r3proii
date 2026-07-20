@@ -44,6 +44,13 @@ Current device-side features include:
 
 “Tetherless” means playback can be browsed and controlled directly from the HiBy instead of using it only as a receiver controlled by a phone or desktop client.
 
+SpotUI is launched manually from its repurposed stock tile. On a cold boot,
+the stock player may remain visible for tens of seconds while its audio
+hardware finishes initializing; SpotUI's loading page appears after the safe
+handoff begins. This delay is intentional because stopping the stock player
+too early can leave the headphone outputs silent until reboot. Automatic
+takeover is not enabled, so normal use of the stock player remains available.
+
 Flashing or modifying firmware can brick your device. Use at your own risk.
 
 ## What is included

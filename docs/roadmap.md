@@ -21,6 +21,8 @@ SpotUI is currently an early developer preview source release for the HiBy R3 Pr
 - Added a staged startup status screen and supervised daemon recovery.
 - Added live WiFi, Spotify, audio, output, and queue diagnostics.
 - Added 60-second idle screen sleep with safe touch wake while audio continues.
+- Tested early stock-side launch feedback and retained the manual, audio-safe
+  handoff after framebuffer contention made the prototype unsuitable.
 - Verified cold-start playback and automatic 3.5 mm/4.4 mm routing.
 - Added a guarded local firmware builder with pre-build and packaged-image integrity checks.
 - Documented the verified local firmware build workflow.
@@ -34,17 +36,15 @@ SpotUI is currently an early developer preview source release for the HiBy R3 Pr
 
 ## Current development priorities
 
-- Consider configurable screen-sleep intervals and hardware power-button wake.
-- Reduce the delay between tapping the stock launcher tile and the first
-  visible SpotUI status frame.
-- Expose useful launch progress during the earliest firmware handoff possible.
+- Add a dedicated Now Playing screen with larger metadata and queue access.
+- Add a settings screen with configurable sleep intervals; separately
+  investigate whether hardware power-button wake can be supported safely.
 - Keep public setup, recovery, and feature documentation synchronized with
   tested milestones.
 
 ## Medium-term goals
 
 - Add automated installation preflight and compatibility checks.
-- Add a dedicated Now Playing screen with larger metadata and queue access.
 - Document device-specific assumptions, such as framebuffer size, input devices, audio routing, and backlight behavior.
 
 ## Possible future goals
@@ -64,6 +64,26 @@ cannot request Spotify's separate `user-library-modify` Web API permission.
 Like and unlike controls are therefore intentionally not included. A future
 implementation would require a separate OAuth flow and user-supplied Spotify
 developer application configuration.
+
+## Launcher limitation
+
+The stock HiBy player must finish initializing the codec and mixer before
+SpotUI takes over. A cold manual launch can therefore leave the stock interface
+visible for tens of seconds before SpotUI's own loading page appears. The
+nonblocking launcher accepts the request once and ignores repeated taps while
+it waits.
+
+A tested framebuffer-only preparation page was not retained: the proprietary
+stock interface continuously flips and redraws its framebuffer pages, causing
+the two interfaces to flicker and leaving stale frames visible. Refreshing the
+prototype aggressively enough to dominate the display would add load during
+the audio-critical initialization period. A clean stock-side status dialog
+would require deeper, firmware-specific integration with the proprietary HiBy
+interface.
+
+SpotUI also does not take over automatically after every reboot. Automatic
+takeover would interrupt users who intend to use the stock player, so manual
+launching remains the deliberate default.
 
 ## Not planned right now
 

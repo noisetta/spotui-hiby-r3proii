@@ -257,6 +257,12 @@ The developer preview currently has these installation limitations:
   intervals and hardware power-button wake are not yet implemented;
 - the stock launcher handoff may take tens of seconds before SpotUI can draw
   its own loading page;
+- the delay protects codec and mixer initialization; stopping `hiby_player`
+  earlier has produced silent headphone output until reboot;
+- the launcher remains manual so a normal boot does not unexpectedly interrupt
+  use of the stock player;
+- stock-side framebuffer progress is not used because HiBy continuously
+  redraws and flips its own pages, causing contention and stale frames;
 - no automatic updater or uninstaller exists;
 - recovery requires familiarity with HiBy firmware flashing;
 - functionality and file formats may change during development.
