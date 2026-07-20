@@ -253,8 +253,8 @@ The developer preview currently has these installation limitations:
 - no guided Spotify authentication flow is included;
 - Like/unlike library writes are unavailable because they require a separate
   Spotify Web API OAuth authorization;
-- screen sleep currently uses a fixed 60-second idle timeout; configurable
-  intervals and hardware power-button wake are not yet implemented;
+- screen sleep supports persistent 30-second, 60-second, 2-minute, 5-minute,
+  and Never options; hardware power-button wake is not yet implemented;
 - the stock launcher handoff may take tens of seconds before SpotUI can draw
   its own loading page;
 - the delay protects codec and mixer initialization; stopping `hiby_player`

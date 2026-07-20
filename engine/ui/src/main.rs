@@ -53,7 +53,6 @@ const ABS_MT_POSITION_Y: u16 = 0x36;
 const SYN_REPORT: u16 = 0x00;
 const VOLUME_POPUP_MS: u128 = 1800;
 const AMBIENT_IDLE_MS: u128 = 2000;
-const SCREEN_SLEEP_MS: u128 = 60_000;
 
 // ---- Backlight ----------------------------------------------------------
 const BL_BRIGHTNESS: &str = "/sys/class/backlight/backlight_pwm0/brightness";
@@ -762,8 +761,16 @@ const BATTERY_CAPACITY: &str = "/sys/class/power_supply/battery/capacity";
 const STORAGE_PATH: &[u8] = b"/usr/data\0";
 const BRIGHTNESS_STATE_FILE: &str = "/usr/data/spotui_brightness";
 const THEME_STATE_FILE: &str = "/usr/data/spotui_theme";
+const SCREEN_SLEEP_STATE_FILE: &str = "/usr/data/spotui_screen_sleep";
 const BRIGHTNESS_LEVELS: [u32; 5] = [100, 80, 60, 40, 25];
 const BRIGHTNESS_LABELS: [&str; 5] = ["100%", "80%", "60%", "40%", "25%"];
+const SCREEN_SLEEP_TIMEOUTS: [Option<u128>; 5] = [
+    Some(30_000),
+    Some(60_000),
+    Some(120_000),
+    Some(300_000),
+    None,
+];
 
 
 fn read_battery_percent() -> Option<u8> {
@@ -866,6 +873,24 @@ fn load_brightness_idx() -> usize {
 fn save_brightness_idx(idx: usize) {
     if let Err(e) = std::fs::write(BRIGHTNESS_STATE_FILE, idx.to_string()) {
         eprintln!("[poc] brightness state save failed: {}", e);
+    }
+}
+
+fn load_screen_sleep_idx() -> usize {
+    match std::fs::read_to_string(SCREEN_SLEEP_STATE_FILE) {
+        Ok(value) => match value.trim().parse::<usize>() {
+            Ok(index) if index < SCREEN_SLEEP_TIMEOUTS.len() => index,
+            _ => 1,
+        },
+        Err(_) => 1,
+    }
+}
+
+fn save_screen_sleep_idx(index: usize) {
+    if let Err(error) =
+        std::fs::write(SCREEN_SLEEP_STATE_FILE, index.to_string())
+    {
+        eprintln!("[poc] screen sleep state save failed: {}", error);
     }
 }
 
@@ -1042,6 +1067,7 @@ enum AppView {
     Appearance,
     Special,
     Diagnostics,
+    Settings,
 }
 
 /// Stable identity for every built-in SpotUI colour theme.
@@ -1165,6 +1191,15 @@ const DIAGNOSTICS_LABELS: [&str; 6] = [
     "Output",
     "Queue",
     "Refresh Status",
+];
+
+const SETTINGS_LABELS: [&str; 6] = [
+    "Sleep: 30 sec",
+    "Sleep: 60 sec",
+    "Sleep: 2 min",
+    "Sleep: 5 min",
+    "Sleep: Never",
+    "Back",
 ];
 
 /// Colours used by the main SpotUI interface.
@@ -2066,6 +2101,7 @@ fn draw_list(
     _storage_free_mb: Option<u64>,
     _memory_available_mb: Option<u64>,
     brightness_idx: usize,
+    screen_sleep_idx: usize,
     playback_state: PlaybackState,
     startup_stage: Option<StartupStage>,
     playback_modes: PlaybackModes,
@@ -2129,6 +2165,7 @@ fn draw_list(
         AppView::Appearance => "Appearance",
         AppView::Special => "Appearance 2",
         AppView::Diagnostics => "Diagnostics",
+        AppView::Settings => "Settings",
         }
     };
 
@@ -2762,6 +2799,7 @@ fn draw_list(
         AppView::Appearance => Some(&APPEARANCE_LABELS),
         AppView::Special => Some(&SPECIAL_LABELS),
         AppView::Diagnostics => Some(&DIAGNOSTICS_LABELS),
+        AppView::Settings => Some(&SETTINGS_LABELS),
     };
 
     if let Some(menu_labels) = visible_menu_labels {
@@ -2830,6 +2868,7 @@ fn draw_list(
                     3 => playback_modes.repeat == RepeatMode::One,
                     _ => false,
                 },
+                AppView::Settings => index == screen_sleep_idx,
                 AppView::Library
                 | AppView::Playlists
                 | AppView::PlaylistTracks
@@ -2977,7 +3016,8 @@ fn draw_list(
         | AppView::Sound
         | AppView::Appearance
         | AppView::Special
-        | AppView::Diagnostics => "Back",
+        | AppView::Diagnostics
+        | AppView::Settings => "Back",
     };
     let button_style =
         MonoTextStyle::new(&FONT_9X15_BOLD, palette.text);
@@ -3195,6 +3235,7 @@ fn main() {
     let mut up_next_offset: usize = 0;
 
     let mut brightness_idx: usize = load_brightness_idx();
+    let mut screen_sleep_idx: usize = load_screen_sleep_idx();
     let mut selected: Option<usize> = None;
     let mut pending_queue_selection:
         Option<PendingQueueSelection> = None;
@@ -3248,6 +3289,7 @@ fn main() {
         storage_free_mb,
         memory_available_mb,
         brightness_idx,
+        screen_sleep_idx,
         playback_state,
         startup_stage,
         playback_modes,
@@ -3589,6 +3631,7 @@ fn main() {
                                                 AppView::Appearance => AppView::Menu,
                                                 AppView::Special => AppView::Appearance,
                                                 AppView::Diagnostics => AppView::Menu,
+                                                AppView::Settings => AppView::Menu,
                                             };
                                             dirty = true;
                                             eprintln!(
@@ -3873,6 +3916,7 @@ fn main() {
                                         | AppView::Appearance
                                         | AppView::Special
                                         | AppView::Diagnostics
+                                        | AppView::Settings
                                 ) {
                                     exit_armed = false;
 
@@ -3889,6 +3933,7 @@ fn main() {
                                         AppView::Appearance => &APPEARANCE_LABELS,
                                         AppView::Special => &SPECIAL_LABELS,
                                         AppView::Diagnostics => &DIAGNOSTICS_LABELS,
+                                        AppView::Settings => &SETTINGS_LABELS,
                                         AppView::Library
                                         | AppView::Playlists
                                         | AppView::PlaylistTracks
@@ -3970,6 +4015,15 @@ fn main() {
                                                                 .unwrap_or(None);
                                                         app_view =
                                                             AppView::Diagnostics;
+                                                        dirty = true;
+                                                        eprintln!(
+                                                            "[poc] app view -> {:?}",
+                                                            app_view
+                                                        );
+                                                    }
+                                                    4 => {
+                                                        app_view =
+                                                            AppView::Settings;
                                                         dirty = true;
                                                         eprintln!(
                                                             "[poc] app view -> {:?}",
@@ -4177,6 +4231,27 @@ fn main() {
                                                         label
                                                     );
                                                 }
+                                            }
+                                            AppView::Settings => {
+                                                if menu_index == 5 {
+                                                    app_view = AppView::Menu;
+                                                } else if menu_index
+                                                    < SCREEN_SLEEP_TIMEOUTS.len()
+                                                {
+                                                    screen_sleep_idx = menu_index;
+                                                    save_screen_sleep_idx(
+                                                        screen_sleep_idx,
+                                                    );
+                                                    last_user_input =
+                                                        std::time::Instant::now();
+                                                    eprintln!(
+                                                        "[poc] screen sleep setting -> {}",
+                                                        SETTINGS_LABELS[
+                                                            screen_sleep_idx
+                                                        ]
+                                                    );
+                                                }
+                                                dirty = true;
                                             }
                                             AppView::Library
                                             | AppView::Playlists
@@ -5053,16 +5128,21 @@ BRIGHTNESS_LABELS[brightness_idx]
             dirty = true;
         }
 
-        if !screen_asleep
-            && startup_stage.is_none()
-            && last_user_input.elapsed().as_millis()
-                >= SCREEN_SLEEP_MS
-        {
+        let screen_sleep_due = SCREEN_SLEEP_TIMEOUTS[screen_sleep_idx]
+            .map(|timeout_ms| {
+                last_user_input.elapsed().as_millis() >= timeout_ms
+            })
+            .unwrap_or(false);
+
+        if !screen_asleep && startup_stage.is_none() && screen_sleep_due {
             write_sysfs(BL_BRIGHTNESS, "0");
             screen_asleep = true;
             dirty = false;
             now_playing_dirty = false;
-            eprintln!("[poc] screen slept after idle timeout");
+            eprintln!(
+                "[poc] screen slept after {}",
+                SETTINGS_LABELS[screen_sleep_idx]
+            );
         }
 
         // Re-check the output jack four times per second. Removing an active
@@ -5154,6 +5234,7 @@ BRIGHTNESS_LABELS[brightness_idx]
                 storage_free_mb,
                 memory_available_mb,
                 brightness_idx,
+                screen_sleep_idx,
                 playback_state,
                 startup_stage,
                 playback_modes,
