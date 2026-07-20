@@ -12,6 +12,15 @@ SpotUI is currently an early developer preview source release for the HiBy R3 Pr
 
 ## Recently completed
 
+- Added queued playback for Liked Songs, playlists, and search results.
+- Added latest-tap-wins track selection and responsive, tap-safe Search.
+- Added queue-aware Previous, Next, and Up Next controls.
+- Added persistent shuffle and repeat modes.
+- Added touchscreen seeking and hardware volume feedback.
+- Added ten redesigned themes with adaptive ambient motion.
+- Added a staged startup status screen and supervised daemon recovery.
+- Added live WiFi, Spotify, audio, output, and queue diagnostics.
+- Verified cold-start playback and automatic 3.5 mm/4.4 mm routing.
 - Added a guarded local firmware builder with pre-build and packaged-image integrity checks.
 - Documented the verified local firmware build workflow.
 - Added final stock-matched SpotUI launcher artwork for both HiBy themes.
@@ -22,20 +31,19 @@ SpotUI is currently an early developer preview source release for the HiBy R3 Pr
 - Expanded recovery, rollback, and common failure troubleshooting procedures.
 - Added a developer preview installation guide with prerequisites, validation, limitations, and rollback guidance.
 
-## Currently working in the development build
+## Current development priorities
 
-- SpotUI launches from the repurposed stock app entry point.
-- Track list loads through the backend daemon.
-- Audio playback works through the supervised daemon/audio pipeline.
-- Exit row requires two taps to reduce accidental reboots.
-- Brightness row cycles through safe brightness levels.
-- Long track names are truncated for readability.
-- The launcher performs WiFi bring-up, output jack routing, daemon supervision, and stale temp-file cleanup.
+- Add configurable screen sleep and reliable touch wake behavior.
+- Reduce the delay between tapping the stock launcher tile and the first
+  visible SpotUI status frame.
+- Expose useful launch progress during the earliest firmware handoff possible.
+- Keep public setup, recovery, and feature documentation synchronized with
+  tested milestones.
 
 ## Medium-term goals
 
 - Add automated installation preflight and compatibility checks.
-- Add clearer logs and diagnostics.
+- Add a dedicated Now Playing screen with larger metadata and queue access.
 - Document device-specific assumptions, such as framebuffer size, input devices, audio routing, and backlight behavior.
 
 ## Possible future goals
@@ -45,6 +53,16 @@ SpotUI is currently an early developer preview source release for the HiBy R3 Pr
 - Improve UI polish while keeping the interface readable and touch-friendly.
 - Investigate safer fallback behavior if the backend daemon fails.
 - Explore a cleaner patch-only installation workflow.
+- Consider optional bring-your-own-client-ID OAuth support for library writes,
+  without making it a standard installation requirement.
+
+## Current service limitation
+
+SpotUI's librespot playback authentication can read the user's Liked Songs but
+cannot request Spotify's separate `user-library-modify` Web API permission.
+Like and unlike controls are therefore intentionally not included. A future
+implementation would require a separate OAuth flow and user-supplied Spotify
+developer application configuration.
 
 ## Not planned right now
 

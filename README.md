@@ -24,14 +24,22 @@ Experimental. Tested primarily on the HiBy R3 Pro II.
 
 Current device-side features include:
 
-- On-device browsing and playback of liked songs
-- Fixed bottom toolbar with Exit, Brightness, Pause/Resume, and Refresh controls
+- On-device browsing and queued playback of Liked Songs and playlists
+- On-device track search with responsive, tap-safe result loading
+- Queue-aware Previous, Next, and Up Next views
+- Persistent shuffle, Repeat Off, Repeat All, and Repeat One modes
+- Pause, resume, and touchscreen progress seeking
+- Fixed bottom toolbar with Exit, Brightness, Pause/Resume, and navigation controls
 - Persistent brightness selection
 - Battery percentage display
 - Automatic 3.5 mm and 4.4 mm output routing
-- Header-based paging through the track list
+- Automatic pause when the active headphone output is disconnected
+- Header-based paging through track, playlist, search, and queue lists
 - Track-name truncation for the compact display
-- Startup retry behavior while WiFi and the playback daemon initialize
+- Ten appearance themes with performance-aware ambient animation
+- A staged WiFi, Spotify, and library loading screen
+- Supervised playback recovery and reconnect feedback
+- Live diagnostics for WiFi, Spotify, audio, output, and queue state
 
 “Tetherless” means playback can be browsed and controlled directly from the HiBy instead of using it only as a receiver controlled by a phone or desktop client.
 
@@ -83,6 +91,10 @@ This source repository does not include firmware images, ready-to-flash builds, 
 
 SpotUI does not use the Spotify Web API. It uses librespot, an open-source Spotify Connect client library, for Spotify-compatible playback.
 
+The current playback login can read Liked Songs but cannot modify the user's
+Spotify library. Adding or removing liked tracks would require a separate
+Spotify Web API OAuth authorization and is not currently supported.
+
 Do not commit Spotify credentials, cache files, tokens, WiFi credentials, firmware images, or device snapshots to this repository.
 
 ## Disclaimer
@@ -101,4 +113,3 @@ This is an independent community research/modding project. It is provided withou
 - [Support policy](SUPPORT.md)
 - [Third-party components](THIRD_PARTY.md)
 - [License](LICENSE)
-

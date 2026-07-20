@@ -251,6 +251,12 @@ The developer preview currently has these installation limitations:
 - no automated stock-firmware extraction workflow is included;
 - no public preflight utility checks the device model and firmware revision;
 - no guided Spotify authentication flow is included;
+- Like/unlike library writes are unavailable because they require a separate
+  Spotify Web API OAuth authorization;
+- screen sleep is not yet implemented, so the panel remains active while
+  SpotUI is running;
+- the stock launcher handoff may take tens of seconds before SpotUI can draw
+  its own loading page;
 - no automatic updater or uninstaller exists;
 - recovery requires familiarity with HiBy firmware flashing;
 - functionality and file formats may change during development.

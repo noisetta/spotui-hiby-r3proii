@@ -165,29 +165,26 @@ The launcher expects the UI and daemon binaries to be executable.
 
 ## Back up the installed binaries
 
-Before replacing either binary:
+The `/usr/data` partition is small enough that three daemon binaries cannot be
+kept safely. Before replacing either binary, pull the active matched pair and
+launcher to a dated directory on the build host and record their hashes:
 
 ```fish
-adb shell '
-set -e
+mkdir -p ~/spotui-device-backups/YYYY-MM-DD-description
 
-if [ -f /usr/data/spotui-ui-poc ]; then
-    cp -p \
-        /usr/data/spotui-ui-poc \
-        /usr/data/spotui-ui-poc.previous
-fi
+adb pull /usr/data/spotui-ui-poc \
+    ~/spotui-device-backups/YYYY-MM-DD-description/spotui-ui-poc
+adb pull /usr/data/spotui_daemon \
+    ~/spotui-device-backups/YYYY-MM-DD-description/spotui_daemon
+adb pull /usr/data/start_spotui.real.sh \
+    ~/spotui-device-backups/YYYY-MM-DD-description/start_spotui.real.sh
 
-if [ -f /usr/data/spotui_daemon ]; then
-    cp -p \
-        /usr/data/spotui_daemon \
-        /usr/data/spotui_daemon.previous
-fi
-
-sync
-'
+sha256sum ~/spotui-device-backups/YYYY-MM-DD-description/*
 ```
 
-This keeps one immediate rollback copy on the device. Preserve additional known-good copies outside the device as well.
+Keep only one compatible `.previous` UI/daemon pair on the device. If staging a
+new daemon requires space, remove an obsolete device rollback only after its
+laptop archive has been verified.
 
 ## Deploy the interface
 
@@ -209,13 +206,14 @@ adb shell \
     sha256sum /usr/data/spotui-ui-poc.new
 ```
 
-After the hashes match:
+After the hashes match, rotate the active binary instead of overwriting it:
 
 ```fish
 adb shell '
 set -e
 
 chmod 755 /usr/data/spotui-ui-poc.new
+mv /usr/data/spotui-ui-poc /usr/data/spotui-ui-poc.previous
 mv \
     /usr/data/spotui-ui-poc.new \
     /usr/data/spotui-ui-poc
@@ -252,6 +250,7 @@ adb shell '
 set -e
 
 chmod 755 /usr/data/spotui_daemon.new
+mv /usr/data/spotui_daemon /usr/data/spotui_daemon.previous
 mv \
     /usr/data/spotui_daemon.new \
     /usr/data/spotui_daemon
@@ -280,6 +279,10 @@ After the device finishes booting:
 7. Confirm that audio is produced through the expected output.
 8. Exit and relaunch SpotUI.
 9. Reboot once more and repeat the startup test.
+
+For a matched UI/daemon protocol change, stage and verify both `.new` files
+before rotating either active file. Activate them together and retain a
+protocol-compatible rollback pair.
 
 ## Runtime files and logs
 
