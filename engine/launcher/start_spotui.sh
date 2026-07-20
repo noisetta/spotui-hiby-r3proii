@@ -139,15 +139,34 @@ printf 'nameserver 1.1.1.1\nnameserver 8.8.8.8\n' > /tmp/resolv.conf
 
 # hiby_player normally associates WiFi; since we've killed it, we must bring
 # WiFi up ourselves. Start wpa_supplicant against the saved config (unless it's
-# already running), then request a DHCP lease. Guarded so re-runs don't stack
-# duplicate daemons.
+# already running), then request a DHCP lease. A cold boot can leave udhcpc
+# associated but sending unanswered discovery packets indefinitely, so keep a
+# single client and recycle both association and DHCP at bounded intervals.
 if ! ps | grep -q "[w]pa_supplicant"; then
     echo "[start] starting wpa_supplicant"
     wpa_supplicant -B -i wlan0 -c /usr/data/wpa_supplicant.conf >/dev/null 2>&1
     sleep 3
 fi
-echo "[start] requesting DHCP lease"
-udhcpc -i wlan0 -n -q >/dev/null 2>&1 &
+
+DHCP_LOG=/tmp/spotui-dhcp.log
+
+stop_dhcp_clients() {
+    for pid in $(ps | grep "[u]dhcpc.*wlan0" | awk '{print $1}'); do
+        kill "$pid" 2>/dev/null
+    done
+}
+
+start_dhcp_client() {
+    echo "[start] requesting DHCP lease"
+    udhcpc -i wlan0 -b -n -t 5 -T 2 \
+        -x hostname:HiBy-R3PROII >>"$DHCP_LOG" 2>&1 &
+    DHCP_PID=$!
+    echo "[start] DHCP client launched (pid $DHCP_PID)"
+}
+
+stop_dhcp_clients
+: >"$DHCP_LOG"
+start_dhcp_client
 
 echo "[start] waiting for WiFi..."
 i=0
@@ -156,10 +175,18 @@ while [ $i -lt 180 ]; do
         echo "[start] WiFi is up"
         break
     fi
-    # Re-request a lease periodically in case the first attempt was too early.
-    if [ $((i % 20)) -eq 19 ]; then
-        udhcpc -i wlan0 -n -q >/dev/null 2>&1 &
+
+    # At 30s and 60s, replace a stalled client rather than stacking another
+    # udhcpc process. Reassociation cleared the observed cold-boot failure
+    # where WPA was complete but the access point returned no DHCP offer.
+    if [ "$i" -eq 59 ] || [ "$i" -eq 119 ]; then
+        echo "[start] DHCP stalled; renewing WiFi association"
+        stop_dhcp_clients
+        wpa_cli -i wlan0 reassociate >/dev/null 2>&1
+        sleep 2
+        start_dhcp_client
     fi
+
     i=$((i + 1))
     sleep 0.5
 done
