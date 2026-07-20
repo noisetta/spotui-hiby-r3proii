@@ -25,7 +25,8 @@ Experimental. Tested primarily on the HiBy R3 Pro II.
 Current device-side features include:
 
 - On-device browsing and queued playback of Liked Songs and playlists
-- On-device track search with responsive, tap-safe result loading
+- On-device track search with responsive, tap-safe result loading and a
+  persistent, deduplicated eight-query recent-search list
 - Queue-aware Previous, Next, and Up Next views
 - Dedicated Now Playing screen with larger metadata, progress seeking,
   playback controls, and direct Up Next access

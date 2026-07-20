@@ -765,6 +765,8 @@ const STORAGE_PATH: &[u8] = b"/usr/data\0";
 const BRIGHTNESS_STATE_FILE: &str = "/usr/data/spotui_brightness";
 const THEME_STATE_FILE: &str = "/usr/data/spotui_theme";
 const SCREEN_SLEEP_STATE_FILE: &str = "/usr/data/spotui_screen_sleep";
+const SEARCH_HISTORY_STATE_FILE: &str = "/usr/data/spotui_search_history";
+const SEARCH_HISTORY_LIMIT: usize = 8;
 const BRIGHTNESS_LEVELS: [u32; 5] = [100, 80, 60, 40, 25];
 const BRIGHTNESS_LABELS: [&str; 5] = ["100%", "80%", "60%", "40%", "25%"];
 const SCREEN_SLEEP_TIMEOUTS: [Option<u128>; 5] = [
@@ -895,6 +897,45 @@ fn save_screen_sleep_idx(index: usize) {
     {
         eprintln!("[poc] screen sleep state save failed: {}", error);
     }
+}
+
+fn load_search_history() -> Vec<String> {
+    std::fs::read_to_string(SEARCH_HISTORY_STATE_FILE)
+        .map(|contents| {
+            contents
+                .lines()
+                .map(str::trim)
+                .filter(|query| !query.is_empty())
+                .take(SEARCH_HISTORY_LIMIT)
+                .map(str::to_string)
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
+fn save_search_history(history: &[String]) {
+    let contents = history
+        .iter()
+        .take(SEARCH_HISTORY_LIMIT)
+        .map(String::as_str)
+        .collect::<Vec<_>>()
+        .join("\n");
+
+    if let Err(error) = std::fs::write(SEARCH_HISTORY_STATE_FILE, contents) {
+        eprintln!("[poc] search history save failed: {}", error);
+    }
+}
+
+fn remember_search(history: &mut Vec<String>, query: &str) {
+    let query = query.trim();
+    if query.is_empty() {
+        return;
+    }
+
+    history.retain(|saved| !saved.eq_ignore_ascii_case(query));
+    history.insert(0, query.to_string());
+    history.truncate(SEARCH_HISTORY_LIMIT);
+    save_search_history(history);
 }
 
 fn load_theme() -> Theme {
@@ -1063,6 +1104,7 @@ enum AppView {
     PlaylistTracks,
     SearchInput,
     SearchResults,
+    SearchHistory,
     Menu,
     Sound,
     UpNext,
@@ -2088,6 +2130,7 @@ fn draw_list(
     playlists: &[PlaylistItem],
     playlist_tracks: &[TrackItem],
     search_results: &[TrackItem],
+    recent_searches: &[String],
     search_query: &str,
     search_in_progress: bool,
     up_next_page: Option<&QueuePage>,
@@ -2161,6 +2204,7 @@ fn draw_list(
         AppView::PlaylistTracks => "Playlist",
         AppView::SearchInput => "Search",
         AppView::SearchResults => "Search Results",
+        AppView::SearchHistory => "Recent Searches",
         AppView::Menu => "More",
         AppView::Sound => "Sound",
         AppView::UpNext => "Up Next",
@@ -2316,6 +2360,9 @@ fn draw_list(
             let end = (search_scroll + VISIBLE_ROWS)
                 .min(search_results.len());
             (search_scroll, search_results.len(), end)
+        }
+        AppView::SearchHistory => {
+            (0, recent_searches.len(), recent_searches.len())
         }
         AppView::UpNext => match up_next_page {
             Some(page) => (
@@ -2561,6 +2608,48 @@ fn draw_list(
                 .ok();
             }
         }
+        AppView::SearchHistory => {
+            if recent_searches.is_empty() {
+                Text::with_baseline(
+                    "No recent searches",
+                    Point::new(10, 62),
+                    text_style,
+                    Baseline::Top,
+                )
+                .draw(fb)
+                .ok();
+            } else {
+                for (row, query) in recent_searches.iter().enumerate() {
+                    let y = 40 + row as i32 * ROW_HEIGHT;
+                    let label = truncate_label(query, 50);
+                    Text::with_baseline(
+                        &label,
+                        Point::new(10, y + 22),
+                        text_style,
+                        Baseline::Top,
+                    )
+                    .draw(fb)
+                    .ok();
+                    Rectangle::new(
+                        Point::new(0, y + ROW_HEIGHT - 1),
+                        Size::new(WIDTH as u32, 1),
+                    )
+                    .into_styled(PrimitiveStyle::with_fill(palette.border))
+                    .draw(fb)
+                    .ok();
+                }
+
+                let clear_y = 40 + recent_searches.len() as i32 * ROW_HEIGHT;
+                Text::with_baseline(
+                    "Clear History",
+                    Point::new(10, clear_y + 22),
+                    sel_style,
+                    Baseline::Top,
+                )
+                .draw(fb)
+                .ok();
+            }
+        }
         AppView::UpNext => {
             if let Some(page) = up_next_page {
                 for (row, queued) in page.items.iter().enumerate() {
@@ -2712,7 +2801,15 @@ fn draw_list(
             }
 
             for (x, width, label) in [
-                (0, 120, "Clear"),
+                (
+                    0,
+                    120,
+                    if search_query.is_empty() && !recent_searches.is_empty() {
+                        "Recent"
+                    } else {
+                        "Clear"
+                    },
+                ),
                 (120, 120, "Space"),
                 (240, 120, "Delete"),
                 (
@@ -2795,6 +2892,7 @@ fn draw_list(
         | AppView::PlaylistTracks
         | AppView::SearchInput
         | AppView::SearchResults
+        | AppView::SearchHistory
         | AppView::UpNext
         | AppView::NowPlaying => None,
         AppView::Menu => Some(&MENU_LABELS),
@@ -2877,6 +2975,7 @@ fn draw_list(
                 | AppView::PlaylistTracks
                 | AppView::SearchInput
                 | AppView::SearchResults
+                | AppView::SearchHistory
                 | AppView::UpNext
                 | AppView::NowPlaying
                 | AppView::Menu
@@ -3013,6 +3112,7 @@ fn draw_list(
         | AppView::PlaylistTracks
         | AppView::SearchInput
         | AppView::SearchResults
+        | AppView::SearchHistory
         | AppView::UpNext
         | AppView::NowPlaying => "Back",
         AppView::Menu
@@ -3229,6 +3329,7 @@ fn main() {
     let mut playlist_track_scroll: usize = 0;
     let mut search_query = String::new();
     let mut search_results: Vec<TrackItem> = Vec::new();
+    let mut recent_searches = load_search_history();
     let mut search_selected: Option<usize> = None;
     let mut search_scroll: usize = 0;
     let mut search_in_progress = false;
@@ -3276,6 +3377,7 @@ fn main() {
         &playlists,
         &playlist_tracks,
         &search_results,
+        &recent_searches,
         &search_query,
         search_in_progress,
         up_next_page.as_ref(),
@@ -3645,6 +3747,9 @@ fn main() {
                                                 AppView::SearchResults => {
                                                     AppView::SearchInput
                                                 }
+                                                AppView::SearchHistory => {
+                                                    AppView::SearchInput
+                                                }
                                                 AppView::Menu => AppView::Library,
                                                 AppView::Sound => AppView::Menu,
                                                 AppView::UpNext => up_next_return_view,
@@ -3881,7 +3986,17 @@ fn main() {
 
                                         match safe_x / 120 {
                                             0 => {
-                                                search_query.clear();
+                                                if search_query.is_empty()
+                                                    && !recent_searches.is_empty()
+                                                {
+                                                    app_view =
+                                                        AppView::SearchHistory;
+                                                    eprintln!(
+                                                        "[poc] app view -> SearchHistory"
+                                                    );
+                                                } else {
+                                                    search_query.clear();
+                                                }
                                                 dirty = true;
                                             }
                                             1 => {
@@ -3932,6 +4047,40 @@ fn main() {
                                             _ => {}
                                         }
                                     }
+                                } else if app_view == AppView::SearchHistory {
+                                    exit_armed = false;
+                                    let row = ((cur_y - LIST_TOP) / ROW_HEIGHT)
+                                        .max(0) as usize;
+
+                                    if let Some(query) =
+                                        recent_searches.get(row).cloned()
+                                    {
+                                        search_query = query.clone();
+                                        eprintln!(
+                                            "[poc] recent search -> {}",
+                                            query
+                                        );
+                                        let (sender, receiver) =
+                                            std::sync::mpsc::channel();
+                                        std::thread::spawn(move || {
+                                            let fetched = daemon_query(
+                                                &format!("SEARCH {}", query),
+                                            );
+                                            let _ = sender.send(fetched);
+                                        });
+                                        search_receiver = Some(receiver);
+                                        search_in_progress = true;
+                                        app_view = AppView::SearchInput;
+                                        dirty = true;
+                                    } else if row == recent_searches.len()
+                                        && !recent_searches.is_empty()
+                                    {
+                                        recent_searches.clear();
+                                        save_search_history(&recent_searches);
+                                        app_view = AppView::SearchInput;
+                                        dirty = true;
+                                        eprintln!("[poc] search history cleared");
+                                    }
                                 } else if matches!(
                                     app_view,
                                     AppView::Menu
@@ -3962,6 +4111,7 @@ fn main() {
                                         | AppView::PlaylistTracks
                                         | AppView::SearchInput
                                         | AppView::SearchResults
+                                        | AppView::SearchHistory
                                         | AppView::UpNext
                                         | AppView::NowPlaying => &MENU_LABELS,
                                         };
@@ -4281,6 +4431,7 @@ fn main() {
                                             | AppView::PlaylistTracks
                                             | AppView::SearchInput
                                             | AppView::SearchResults
+                                            | AppView::SearchHistory
                                             | AppView::UpNext
                                             | AppView::NowPlaying => {}
                                         }
@@ -4697,6 +4848,7 @@ BRIGHTNESS_LABELS[brightness_idx]
 
             if let Some(fetched) = completed {
                 let result_count = fetched.len();
+                remember_search(&mut recent_searches, &search_query);
                 search_results = if fetched.is_empty() {
                     vec![TrackItem {
                         id: String::new(),
@@ -5275,6 +5427,7 @@ BRIGHTNESS_LABELS[brightness_idx]
                 &playlists,
                 &playlist_tracks,
                 &search_results,
+                &recent_searches,
                 &search_query,
                 search_in_progress,
                 up_next_page.as_ref(),
