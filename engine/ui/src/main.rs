@@ -323,6 +323,14 @@ impl StartupStage {
             Self::Library => 360,
         }
     }
+
+    fn retry_label(self) -> &'static str {
+        match self {
+            Self::Wifi => "Retry Wi-Fi",
+            Self::Spotify => "Retry Spotify",
+            Self::Library => "Retry Library",
+        }
+    }
 }
 
 fn wifi_has_default_route() -> bool {
@@ -336,6 +344,68 @@ fn wifi_has_default_route() -> bool {
             })
         })
         .unwrap_or(false)
+}
+
+fn terminate_process_with_arg(argument: &str) -> bool {
+    let Ok(entries) = std::fs::read_dir("/proc") else {
+        return false;
+    };
+
+    for entry in entries.flatten() {
+        let Some(pid) = entry
+            .file_name()
+            .to_str()
+            .and_then(|name| name.parse::<i32>().ok())
+        else {
+            continue;
+        };
+        let cmdline_path = entry.path().join("cmdline");
+        let Ok(cmdline) = std::fs::read(cmdline_path) else {
+            continue;
+        };
+
+        if cmdline
+            .split(|byte| *byte == 0)
+            .any(|field| field == argument.as_bytes())
+        {
+            return unsafe { libc::kill(pid, libc::SIGTERM) == 0 };
+        }
+    }
+
+    false
+}
+
+fn request_startup_recovery(stage: StartupStage) {
+    match stage {
+        StartupStage::Wifi => {
+            let _ = std::process::Command::new("killall")
+                .arg("udhcpc")
+                .status();
+            let _ = std::process::Command::new("wpa_cli")
+                .args(["-i", "wlan0", "reassociate"])
+                .status();
+            let _ = std::process::Command::new("udhcpc")
+                .args([
+                    "-i",
+                    "wlan0",
+                    "-b",
+                    "-n",
+                    "-t",
+                    "5",
+                    "-T",
+                    "2",
+                    "-x",
+                    "hostname:HiBy-R3PROII",
+                ])
+                .stdout(std::process::Stdio::null())
+                .stderr(std::process::Stdio::null())
+                .spawn();
+        }
+        StartupStage::Spotify => {
+            terminate_process_with_arg("/usr/data/spotui_daemon");
+        }
+        StartupStage::Library => {}
+    }
 }
 
 /// Check whether a named process is present without spawning `ps`. Diagnostics
@@ -2150,6 +2220,8 @@ fn draw_list(
     screen_sleep_idx: usize,
     playback_state: PlaybackState,
     startup_stage: Option<StartupStage>,
+    startup_elapsed_secs: u64,
+    startup_retry_active: bool,
     playback_modes: PlaybackModes,
     queue_status: Option<&QueueStatus>,
     diagnostics_refreshed: bool,
@@ -2320,10 +2392,43 @@ fn draw_list(
         .draw(fb)
         .ok();
 
+        let elapsed_label = format!("Waiting {}s", startup_elapsed_secs);
+        let elapsed_x =
+            (WIDTH as i32 - elapsed_label.chars().count() as i32 * 9) / 2;
         Text::with_baseline(
-            "Please wait",
-            Point::new(190, 405),
+            &elapsed_label,
+            Point::new(elapsed_x, 405),
             MonoTextStyle::new(&FONT_9X15, palette.text),
+            Baseline::Top,
+        )
+        .draw(fb)
+        .ok();
+
+        let retry_fill = if startup_retry_active {
+            palette.header
+        } else {
+            palette.selected_row
+        };
+        let retry_text = if startup_retry_active {
+            palette.header_text
+        } else {
+            palette.selected_text
+        };
+        Rectangle::new(Point::new(110, 455), Size::new(260, 60))
+            .into_styled(PrimitiveStyle::with_fill(retry_fill))
+            .draw(fb)
+            .ok();
+        let retry_label = if startup_retry_active {
+            "Retry requested"
+        } else {
+            stage.retry_label()
+        };
+        let retry_x =
+            (WIDTH as i32 - retry_label.chars().count() as i32 * 9) / 2;
+        Text::with_baseline(
+            retry_label,
+            Point::new(retry_x, 477),
+            MonoTextStyle::new(&FONT_9X15_BOLD, retry_text),
             Baseline::Top,
         )
         .draw(fb)
@@ -3402,6 +3507,8 @@ fn main() {
         screen_sleep_idx,
         playback_state,
         startup_stage,
+        0,
+        false,
         playback_modes,
         active_queue_status.as_ref(),
         false,
@@ -3504,6 +3611,8 @@ fn main() {
     let mut last_jack_check = std::time::Instant::now();
     let mut last_port: Option<u8> = initial_port;
     let mut last_liked_retry = std::time::Instant::now();
+    let mut startup_stage_started_at = std::time::Instant::now();
+    let mut startup_retry_at: Option<std::time::Instant> = None;
     let mut last_status_check = std::time::Instant::now();
     let mut consecutive_status_failures: u8 = 0;
     let mut last_battery_check = std::time::Instant::now();
@@ -3568,6 +3677,33 @@ fn main() {
                                 const DOWN_STRIP_TOP: i32 = 640;
                                 const TOOLBAR_TOP: i32 = 660;
                                 const BUTTON_WIDTH: i32 = 120;
+
+                                if let Some(stage) = startup_stage {
+                                    if cur_y >= 435 && cur_y < 535 {
+                                        request_startup_recovery(stage);
+                                        if stage == StartupStage::Library {
+                                            last_liked_retry =
+                                                std::time::Instant::now()
+                                                    .checked_sub(
+                                                        std::time::Duration::from_secs(3),
+                                                    )
+                                                    .unwrap_or_else(
+                                                        std::time::Instant::now,
+                                                    );
+                                        }
+                                        startup_stage_started_at =
+                                            std::time::Instant::now();
+                                        startup_retry_at =
+                                            Some(std::time::Instant::now());
+                                        dirty = true;
+                                        touch_down = false;
+                                        eprintln!(
+                                            "[poc] startup retry -> {:?}",
+                                            stage
+                                        );
+                                        continue;
+                                    }
+                                }
 
                                 if cur_y < LIST_TOP {
                                     exit_armed = false;
@@ -4881,6 +5017,7 @@ BRIGHTNESS_LABELS[brightness_idx]
         // makes the UI robust to being launched before the daemon is up.
         if !tracks_loaded && last_liked_retry.elapsed().as_millis() >= 2000 {
             last_liked_retry = std::time::Instant::now();
+            dirty = true;
             let updated_stage = if !wifi_has_default_route() {
                 StartupStage::Wifi
             } else if daemon_playback_state().is_some() {
@@ -4891,6 +5028,8 @@ BRIGHTNESS_LABELS[brightness_idx]
 
             if startup_stage != Some(updated_stage) {
                 startup_stage = Some(updated_stage);
+                startup_stage_started_at = std::time::Instant::now();
+                startup_retry_at = None;
                 dirty = true;
                 eprintln!(
                     "[poc] startup stage -> {:?}",
@@ -4903,11 +5042,20 @@ BRIGHTNESS_LABELS[brightness_idx]
                 items = fetched;
                 tracks_loaded = true;
                 startup_stage = None;
+                startup_retry_at = None;
                 scroll = 0;
                 selected = None;
                 dirty = true;
                 eprintln!("[poc] loaded {} liked tracks (retry)", items.len());
             }
+        }
+
+        if startup_retry_at
+            .map(|started| started.elapsed().as_millis() >= 1500)
+            .unwrap_or(false)
+        {
+            startup_retry_at = None;
+            dirty = true;
         }
 
         // Synchronize playback state, current-track metadata, and position
@@ -5452,6 +5600,8 @@ BRIGHTNESS_LABELS[brightness_idx]
                 screen_sleep_idx,
                 playback_state,
                 startup_stage,
+                startup_stage_started_at.elapsed().as_secs(),
+                startup_retry_at.is_some(),
                 playback_modes,
                 active_queue_status.as_ref(),
                 diagnostics_refreshed_at.is_some(),

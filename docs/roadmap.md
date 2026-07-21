@@ -23,6 +23,8 @@ SpotUI is currently an early developer preview source release for the HiBy R3 Pr
 - Added touchscreen seeking and hardware volume feedback.
 - Added ten redesigned themes with adaptive ambient motion.
 - Added a staged startup status screen and supervised daemon recovery.
+- Added elapsed startup timing and stage-specific Wi-Fi, Spotify, and library
+  retry controls.
 - Added live WiFi, Spotify, audio, output, and queue diagnostics.
 - Added persistent 30-second, 60-second, 2-minute, 5-minute, and Never
   screen-sleep settings with safe touch and power-button wake while audio

@@ -88,6 +88,11 @@ cat /tmp/daemon.log 2>/dev/null || true
 '
 ```
 
+The startup page shows elapsed waiting time and a retry action for its current
+stage. `Retry Wi-Fi` renews association and DHCP, `Retry Spotify` restarts only
+the supervised daemon attempt, and `Retry Library` repeats the saved-track
+request. Automatic recovery continues even when the button is not used.
+
 Check the relevant processes and socket:
 
 ```fish
