@@ -19,6 +19,10 @@ SpotUI is currently an early developer preview source release for the HiBy R3 Pr
 - Added queue-aware Previous, Next, and Up Next controls.
 - Added a dedicated Now Playing screen with larger metadata, elapsed and
   remaining time, seeking, playback controls, and direct queue access.
+- Expanded Now Playing with themed track artwork, queue and playback-mode
+  context, output status, larger controls, and clearer time information.
+- Preserved the active queue and retried the current track after a first
+  transient Spotify unavailable event.
 - Added persistent shuffle and repeat modes.
 - Added touchscreen seeking and hardware volume feedback.
 - Added ten redesigned themes with adaptive ambient motion.

@@ -480,11 +480,43 @@ async fn main() {
                     exit(75);
                 }
 
-                *event_playback_queue.write().await =
-                    PlaybackQueue::default();
+                let retry_track = {
+                    let queue = event_playback_queue.read().await;
+                    queue.current_index.and_then(|index| {
+                        queue.track_ids.get(index).cloned()
+                    })
+                };
+
+                if let Some(retry_track) = retry_track {
+                    match SpotifyId::from_base62(&retry_track) {
+                        Ok(id) => {
+                            *event_state.write().await = "LOADING";
+                            eprintln!(
+                                "[spotui] unavailable track 1/2; preserving queue and retrying {}",
+                                retry_track
+                            );
+                            tokio::time::sleep(Duration::from_secs(2)).await;
+                            event_player.load(
+                                SpotifyUri::Track { id },
+                                true,
+                                0,
+                            );
+                            continue;
+                        }
+                        Err(error) => {
+                            eprintln!(
+                                "[spotui] unavailable retry id invalid '{}': {}",
+                                retry_track,
+                                error
+                            );
+                        }
+                    }
+                }
+
+                *event_playback_queue.write().await = PlaybackQueue::default();
                 event_player.stop();
                 eprintln!(
-                    "[spotui] unavailable track 1/2; cleared queue and reset player"
+                    "[spotui] unavailable track 1/2 without retry target; cleared queue"
                 );
             }
 

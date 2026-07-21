@@ -2052,6 +2052,8 @@ fn draw_now_playing_view(
     now_playing: Option<&NowPlaying>,
     playback_position: Option<u32>,
     playback_state: PlaybackState,
+    playback_modes: PlaybackModes,
+    queue_status: Option<&QueueStatus>,
     palette: &Palette,
 ) {
     Rectangle::new(Point::new(0, 40), Size::new(WIDTH as u32, 620))
@@ -2065,6 +2067,55 @@ fn draw_now_playing_view(
 
     match now_playing {
         Some(item) => {
+            let visual_seed = item
+                .id
+                .bytes()
+                .fold(0u32, |seed, byte| {
+                    seed.wrapping_mul(33).wrapping_add(byte as u32)
+                });
+            Rectangle::new(Point::new(140, 58), Size::new(200, 150))
+                .into_styled(
+                    PrimitiveStyle::with_fill(palette.now_playing),
+                )
+                .draw(fb)
+                .ok();
+            Rectangle::new(Point::new(140, 58), Size::new(200, 150))
+                .into_styled(
+                    PrimitiveStyle::with_stroke(palette.border, 2),
+                )
+                .draw(fb)
+                .ok();
+            for index in 0..5u32 {
+                let bar_height =
+                    24 + ((visual_seed >> (index * 5)) & 63) as u32;
+                Rectangle::new(
+                    Point::new(165 + index as i32 * 31, 178 - bar_height as i32),
+                    Size::new(16, bar_height),
+                )
+                .into_styled(PrimitiveStyle::with_fill(
+                    if index % 2 == 0 {
+                        palette.progress_fill
+                    } else {
+                        palette.selected_row
+                    },
+                ))
+                .draw(fb)
+                .ok();
+            }
+            Circle::new(Point::new(211, 91), 58)
+                .into_styled(PrimitiveStyle::with_stroke(
+                    palette.text,
+                    3,
+                ))
+                .draw(fb)
+                .ok();
+            Circle::new(Point::new(232, 112), 16)
+                .into_styled(PrimitiveStyle::with_fill(
+                    palette.progress_fill,
+                ))
+                .draw(fb)
+                .ok();
+
             let title = truncate_label(&item.title, 42);
             let artist = truncate_label(
                 if item.artist.is_empty() {
@@ -2079,7 +2130,7 @@ fn draw_now_playing_view(
 
             Text::with_baseline(
                 &title,
-                Point::new(title_x.max(8), 145),
+                Point::new(title_x.max(8), 225),
                 title_style,
                 Baseline::Top,
             )
@@ -2087,7 +2138,7 @@ fn draw_now_playing_view(
             .ok();
             Text::with_baseline(
                 &artist,
-                Point::new(artist_x.max(8), 190),
+                Point::new(artist_x.max(8), 258),
                 text_style,
                 Baseline::Top,
             )
@@ -2104,7 +2155,7 @@ fn draw_now_playing_view(
 
             Text::with_baseline(
                 &elapsed,
-                Point::new(20, 322),
+                Point::new(20, 328),
                 text_style,
                 Baseline::Top,
             )
@@ -2112,14 +2163,14 @@ fn draw_now_playing_view(
             .ok();
             Text::with_baseline(
                 &remaining,
-                Point::new(460 - remaining.chars().count() as i32 * 9, 322),
+                Point::new(460 - remaining.chars().count() as i32 * 9, 328),
                 text_style,
                 Baseline::Top,
             )
             .draw(fb)
             .ok();
 
-            Rectangle::new(Point::new(20, 300), Size::new(440, 10))
+            Rectangle::new(Point::new(20, 306), Size::new(440, 10))
                 .into_styled(PrimitiveStyle::with_fill(palette.progress_track))
                 .draw(fb)
                 .ok();
@@ -2127,12 +2178,63 @@ fn draw_now_playing_view(
                 let filled =
                     (position_ms as u64 * 440 / duration_ms as u64) as u32;
                 if filled > 0 {
-                    Rectangle::new(Point::new(20, 300), Size::new(filled, 10))
+                    Rectangle::new(Point::new(20, 306), Size::new(filled, 10))
                         .into_styled(PrimitiveStyle::with_fill(palette.progress_fill))
                         .draw(fb)
                         .ok();
                 }
             }
+
+            let queue_label = queue_status
+                .map(|queue| {
+                    let source = match &queue.source {
+                        QueueSource::Liked => "Liked",
+                        QueueSource::Playlist(_) => "Playlist",
+                        QueueSource::Search => "Search",
+                    };
+                    format!("{} {} / {}", source, queue.index + 1, queue.length)
+                })
+                .unwrap_or_else(|| "No queue".to_string());
+            let repeat_label = match playback_modes.repeat {
+                RepeatMode::Off => "Repeat Off",
+                RepeatMode::All => "Repeat All",
+                RepeatMode::One => "Repeat One",
+            };
+            let output_label = if switch_active(SW_BALANCE) {
+                "4.4 mm"
+            } else if switch_active(SW_HEADSET) {
+                "3.5 mm"
+            } else {
+                "No jack"
+            };
+            let mode_label = format!(
+                "{}  |  Shuffle {}  |  {}",
+                queue_label,
+                if playback_modes.shuffle { "On" } else { "Off" },
+                repeat_label,
+            );
+            let mode_status = truncate_label(&mode_label, 52);
+            let mode_x =
+                (WIDTH as i32 - mode_status.chars().count() as i32 * 9) / 2;
+            Text::with_baseline(
+                &mode_status,
+                Point::new(mode_x.max(6), 348),
+                text_style,
+                Baseline::Top,
+            )
+            .draw(fb)
+            .ok();
+            let output_status = format!("Output: {}", output_label);
+            let output_x =
+                (WIDTH as i32 - output_status.chars().count() as i32 * 9) / 2;
+            Text::with_baseline(
+                &output_status,
+                Point::new(output_x.max(6), 367),
+                text_style,
+                Baseline::Top,
+            )
+            .draw(fb)
+            .ok();
         }
         None => {
             let label = match playback_state {
@@ -2166,7 +2268,11 @@ fn draw_now_playing_view(
     }
 
     let middle_label = if playback_state.is_paused() { "Play" } else { "Pause" };
-    for (label, center_x) in [("Previous", 80), (middle_label, 240), ("Next", 400)] {
+    for (label, center_x) in [
+        ("<< Previous", 80),
+        (middle_label, 240),
+        ("Next >>", 400),
+    ] {
         Text::with_baseline(
             label,
             Point::new(center_x - label.chars().count() as i32 * 9 / 2, 432),
@@ -2181,10 +2287,13 @@ fn draw_now_playing_view(
         .into_styled(PrimitiveStyle::with_fill(palette.now_playing))
         .draw(fb)
         .ok();
-    let queue_label = "View Up Next";
+    let queue_label = "Up Next  |  View Queue";
     Text::with_baseline(
         queue_label,
-        Point::new((WIDTH as i32 - queue_label.len() as i32 * 9) / 2, 558),
+        Point::new(
+            (WIDTH as i32 - queue_label.chars().count() as i32 * 9) / 2,
+            558,
+        ),
         button_style,
         Baseline::Top,
     )
@@ -2841,6 +2950,8 @@ fn draw_list(
                 now_playing,
                 playback_position,
                 playback_state,
+                playback_modes,
+                queue_status,
                 palette,
             );
         }
@@ -4065,6 +4176,14 @@ fn main() {
                                         && cur_x < 400
                                         && now_playing.is_some()
                                     {
+                                        if let Some(updated_modes) =
+                                            daemon_playback_modes()
+                                        {
+                                            playback_modes = updated_modes;
+                                        }
+                                        active_queue_status =
+                                            daemon_queue_status()
+                                                .unwrap_or(None);
                                         now_playing_return_view = app_view;
                                         app_view = AppView::NowPlaying;
                                         dirty = true;
@@ -5043,6 +5162,16 @@ BRIGHTNESS_LABELS[brightness_idx]
                 tracks_loaded = true;
                 startup_stage = None;
                 startup_retry_at = None;
+                if let Some(updated_modes) = daemon_playback_modes() {
+                    playback_modes = updated_modes;
+                    eprintln!(
+                        "[poc] startup playback modes -> shuffle={} repeat={:?}",
+                        playback_modes.shuffle,
+                        playback_modes.repeat
+                    );
+                }
+                active_queue_status =
+                    daemon_queue_status().unwrap_or(None);
                 scroll = 0;
                 selected = None;
                 dirty = true;
