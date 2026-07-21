@@ -7,7 +7,8 @@ These instructions apply to the entire repository.
 SpotUI is a standalone Spotify client for the HiBy R3 Pro II. It consists of
 a Rust framebuffer/touchscreen UI and a Rust control daemon built against
 librespot 0.8.0. The UI communicates with the daemon through
-`/tmp/spotui.sock`, and the daemon sends PCM audio to `aplay`.
+`/tmp/spotui.sock`, and the daemon starts a dedicated `aplay` subprocess for
+each active playback sink.
 
 ## Canonical Sources and Artifacts
 
@@ -130,8 +131,9 @@ push a milestone until the user approves or requests the push.
 - Verify every staged hash before rotating files.
 - Keep UI and daemon rollback files protocol-compatible.
 - After activation, verify the active and rollback hashes, reboot if needed,
-  and confirm `spotui-ui-poc`, `spotui_daemon`, `aplay`, and
-  `/tmp/spotui.sock` are healthy.
+  and confirm `spotui-ui-poc`, `spotui_daemon`, and `/tmp/spotui.sock` are
+  healthy. Confirm `aplay` appears while audio is playing and exits while
+  playback is paused or stopped.
 - Report what was removed from the device and where its verified laptop backup
   is stored.
 

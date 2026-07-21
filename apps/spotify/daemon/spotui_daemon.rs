@@ -33,10 +33,9 @@
 //   SEEK <milliseconds>      -> seek within the loaded track
 //   QUIT                     -> shut the daemon down
 //
-// Audio goes out through whichever backend `audio_backend::find` selects,
-// same as the stock binary (we pass --backend on the command line / via the
-// SinkBuilder). For the HiBy we use the pipe backend piped to aplay, exactly
-// as already proven working.
+// Audio uses librespot's subprocess backend. Each playback sink owns an aplay
+// process so loading, pause, and track replacement cannot reuse an ALSA stream
+// that has already entered underrun recovery.
 
 use std::{
     collections::HashMap,
@@ -72,6 +71,8 @@ const TCP_ADDR: &str = "127.0.0.1:5599";
 // right after a firmware flash, where the SD is removed before reboot.
 const CACHE_DIR: &str = "/usr/data/librespot-cache";
 const PLAYBACK_MODES_PATH: &str = "/usr/data/spotui_playback_modes";
+const APLAY_COMMAND: &str =
+    "aplay -D hw:0,0 -f S16_LE -r 44100 -c 2 -B 1000000 -F 125000";
 
 struct NowPlaying {
     id: String,
@@ -238,6 +239,7 @@ async fn main() {
     let session_config = SessionConfig::default();
     let mut player_config = PlayerConfig::default();
     player_config.position_update_interval = Some(Duration::from_secs(1));
+    player_config.gapless = false;
     let audio_format = AudioFormat::default();
 
     // The device's WiFi stream can pause for longer than librespot's default
@@ -285,15 +287,16 @@ async fn main() {
     eprintln!("[spotui] connected as {:?}", session.username());
 
     // --- Player ------------------------------------------------------------
-    // The backend is selected the same way the stock binary does it.
-    // Passing None to find() yields the default-registered backend; for the
-    // HiBy build we compile with the pipe backend always present (StdoutSink).
-    let backend = audio_backend::find(Some("pipe".to_string()))
-        .or_else(|| audio_backend::find(None))
-        .expect("no audio backend available");
+    // Start a fresh aplay process with each sink lifecycle. Keeping one aplay
+    // process open across loading gaps leaves ALSA in an underrun/recovery
+    // cycle that is audible at the beginning of the next track.
+    let backend = audio_backend::find(Some("subprocess".to_string()))
+        .expect("subprocess audio backend unavailable");
+    let aplay_command = APLAY_COMMAND.to_string();
 
     // Software volume mixer (softvol). librespot attenuates the PCM by the
-    // mixer's current volume before it reaches the pipe/aplay. We keep an Arc
+    // mixer's current volume before it reaches the subprocess/aplay. We keep
+    // an Arc
     // to it so the command handlers can adjust volume live.
     let mixer_builder = mixer::find(Some("softvol")).expect("softvol mixer not found");
     let mixer: Arc<dyn Mixer> =
@@ -305,7 +308,7 @@ async fn main() {
         player_config,
         session.clone(),
         mixer.get_soft_volume(),
-        move || backend(None, audio_format),
+        move || backend(Some(aplay_command.clone()), audio_format),
     );
 
     // Track actual player state and current metadata from librespot events.

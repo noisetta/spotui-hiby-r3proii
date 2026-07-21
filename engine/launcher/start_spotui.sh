@@ -13,8 +13,7 @@
 #                              "Connecting..." and retries LIKED until daemon up)
 #   3. DNS + wait for WiFi
 #   4. set default output port
-#   5. start daemon | aplay   (DEFAULT aplay buffering; big buffer flags starve
-#                              the live pipe -> silence)
+#   5. start daemon           (the daemon starts/stops aplay with playback)
 #   The UI (already running) auto-loads liked songs once the daemon answers.
 #
 # Run on-device:  sh /usr/data/start_spotui.sh
@@ -204,7 +203,7 @@ else
     echo "[start] defaulting to 3.5mm -> port 2"
 fi
 
-# --- 5. Start the daemon piped to aplay (DEFAULT buffering) ------------------
+# --- 5. Start the daemon (it owns the aplay playback lifecycle) --------------
 # Supervise it: if the daemon exits (e.g. Spotify unreachable because WiFi
 # wasn't fully ready yet at cold boot), wait and relaunch. This makes the stack
 # self-healing -- the UI stays up showing "Connecting..." and picks up the
@@ -215,9 +214,8 @@ rm -rf "$SPOTUI_TMP"
 mkdir -p "$SPOTUI_TMP"
 (
     while true; do
-        echo "[start] (re)starting daemon+aplay"
-        TMPDIR="$SPOTUI_TMP" "$LOADER" "$DAEMON" 2>>"$DAEMON_LOG" \
-            | aplay -D hw:0,0 -f S16_LE -r 44100 -c 2
+        echo "[start] (re)starting daemon"
+        TMPDIR="$SPOTUI_TMP" "$LOADER" "$DAEMON" >>"$DAEMON_LOG" 2>&1
         echo "[start] daemon exited; retrying in 5s"
         sleep 5
     done

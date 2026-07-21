@@ -12,7 +12,7 @@
 //   5. sends "LOAD <track_id>" to the running spotui daemon over TCP/unix,
 //      so audio plays -- letting us watch for underruns while drawing.
 //
-// Run the spotui_daemon (piped to aplay) separately; this just drives it.
+// Run the spotui_daemon separately; it owns the per-playback aplay process.
 
 use std::{
     fs::{File, OpenOptions},
@@ -3010,14 +3010,19 @@ fn draw_list(
 
                             format!("Spotify: {}", daemon_status)
                         }
-                        2 => format!(
-                            "Audio: {}",
-                            if process_running("aplay") {
-                                "Ready"
-                            } else {
-                                "Offline"
-                            }
-                        ),
+                        2 => {
+                            let audio_status = match playback_state {
+                                PlaybackState::Unknown
+                                | PlaybackState::Error => "Offline",
+                                PlaybackState::Playing
+                                    if !process_running("aplay") =>
+                                {
+                                    "Starting"
+                                }
+                                _ => "Ready",
+                            };
+                            format!("Audio: {}", audio_status)
+                        }
                         3 => {
                             let output = if switch_active(SW_BALANCE) {
                                 "4.4 mm"

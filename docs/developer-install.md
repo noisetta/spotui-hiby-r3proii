@@ -223,7 +223,7 @@ A valid test should confirm:
 - the wrapper returns control to the HiBy interface immediately;
 - SpotUI waits for device readiness rather than killing the stock player too early;
 - the UI owns and refreshes the framebuffer after takeover;
-- the daemon and `aplay` remain supervised;
+- the daemon remains supervised, with `aplay` present during active playback;
 - audio works after a cold boot;
 - the device can be recovered by rebooting if the interface freezes.
 

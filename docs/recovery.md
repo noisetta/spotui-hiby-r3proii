@@ -105,7 +105,8 @@ Possible causes:
 
 - The stock player was killed too early before codec initialization completed.
 - The backend daemon is not running.
-- `aplay` is not running.
+- `aplay` is not running while Spotify reports active playback. It normally
+  exits while playback is paused or stopped.
 - The output jack route is wrong.
 - WiFi is not connected.
 - `/usr/data` is full.
