@@ -242,11 +242,11 @@ async fn main() {
     player_config.gapless = false;
     let audio_format = AudioFormat::default();
 
-    // The device's WiFi stream can pause for longer than librespot's default
-    // one-second startup read-ahead. Wait for two seconds of compressed audio
-    // before decoding starts so the pipe does not starve at track startup.
+    // The device's WiFi stream can pause briefly while a fresh per-track ALSA
+    // sink starts. Build a deeper compressed-audio reserve before decoding so
+    // that startup work cannot starve the sink during its first few seconds.
     let mut audio_fetch_params = AudioFetchParams::default();
-    audio_fetch_params.read_ahead_before_playback = Duration::from_secs(2);
+    audio_fetch_params.read_ahead_before_playback = Duration::from_secs(6);
     if AudioFetchParams::set(audio_fetch_params).is_err() {
         eprintln!("[spotui] audio fetch parameters were already initialized");
         exit(1);
