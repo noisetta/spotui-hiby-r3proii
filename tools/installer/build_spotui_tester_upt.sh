@@ -10,7 +10,7 @@ REAL_LAUNCHER="$REPO_ROOT/engine/launcher/start_spotui.sh"
 WRAPPER_LAUNCHER="$REPO_ROOT/engine/launcher/start_spotui_wrapper.sh"
 RETURN_LAUNCHER="$REPO_ROOT/engine/launcher/return_to_hiby.sh"
 
-SPOTUI_VERSION="0.1.0-beta.2"
+SPOTUI_VERSION="0.1.0-beta.5-test.4"
 HMOD_VERSION="1.5"
 RUNTIME_VERSION="spotui-${SPOTUI_VERSION}+hmod-${HMOD_VERSION}"
 
@@ -19,8 +19,12 @@ EXPECTED_ROOTFS_SHA256="a39afd4313e8f48b36b0e8beb5ea98ef9f648f9578b5deb7c1034977
 EXPECTED_ROOTFS_MD5="eb377558534224d1f61a1d873aa45374"
 EXPECTED_ROOTFS_SIZE="37347328"
 EXPECTED_KERNEL_SHA256="a00fd923f1480861de742a42a038f3f21d7605a9220c3cc86bdf7f4a64fc4541"
-EXPECTED_PLAYER_SHA256="e5b61d35726a07906eb489e3bdd0a989ec4b2857970d16b55b77fcb781fcb8b0"
-EXPECTED_PLAYER_SH_SHA256="68e4c4254dac0800746b9d76af0c19ec44a08a42f58964fe48e966dcdb22e6b9"
+EXPECTED_PLAYER_SHA256="b3e787645d86bcf887699f53810e456bb8b7e9cd975014b46e421996255ae520"
+EXPECTED_PLAYER_SH_SHA256="51146afdfc677778127a268876690c0e1ddece312f459c83bb88eeb75342527c"
+EXPECTED_LAYOUT_THEME1_SHA256="4b92577f25708274dacce31eec24ca3f462d3081f026f7e03cbd4e9a42d39c74"
+EXPECTED_LAYOUT_THEME1_CN_SHA256="318cf393dec22a2b07b776475d59389d178b648ef87a854a8bce236dfe801afa"
+EXPECTED_LAYOUT_THEME2_SHA256="b5c296156c12f3f81ed8fe3fbfaa8d71feda9ae3e3a60ca5054e625b9476b21a"
+EXPECTED_LAYOUT_THEME2_CN_SHA256="ce12d10fe4ad2e015496089e3425d8c4aa8434496e82b55967705d7f69f291ff"
 EXPECTED_BACKUP_SHA256="4df2dcd0b23c233da37a25853b8a1843dc93a218ff9ec251abd88466443a664d"
 
 BASE_TIMESTAMP="2026-01-15 20:45:38"
@@ -238,17 +242,17 @@ unsquashfs -f -d "$ROOTFS_TREE" "$ORIGINAL_ROOTFS" >/dev/null
 python3 "$PATCHER" "$ROOTFS_TREE"
 
 install -m 0644 \
-    "$REPO_ROOT/engine/launcher/resources/spotui/theme1/qobuz.png" \
-    "$ROOTFS_TREE/usr/resource/litegui/theme1/stream_media/qobuz.png"
+    "$REPO_ROOT/engine/launcher/resources/spotui/theme1/spotui.png" \
+    "$ROOTFS_TREE/usr/resource/litegui/theme1/stream_media/spotui.png"
 install -m 0644 \
-    "$REPO_ROOT/engine/launcher/resources/spotui/theme1/qobuz_s.png" \
-    "$ROOTFS_TREE/usr/resource/litegui/theme1/stream_media/qobuz_s.png"
+    "$REPO_ROOT/engine/launcher/resources/spotui/theme1/spotui_s.png" \
+    "$ROOTFS_TREE/usr/resource/litegui/theme1/stream_media/spotui_s.png"
 install -m 0644 \
-    "$REPO_ROOT/engine/launcher/resources/spotui/theme2/qobuz.png" \
-    "$ROOTFS_TREE/usr/resource/litegui/theme2/stream_media/qobuz.png"
+    "$REPO_ROOT/engine/launcher/resources/spotui/theme2/spotui.png" \
+    "$ROOTFS_TREE/usr/resource/litegui/theme2/stream_media/spotui.png"
 install -m 0644 \
-    "$REPO_ROOT/engine/launcher/resources/spotui/theme2/qobuz_s.png" \
-    "$ROOTFS_TREE/usr/resource/litegui/theme2/stream_media/qobuz_s.png"
+    "$REPO_ROOT/engine/launcher/resources/spotui/theme2/spotui_s.png" \
+    "$ROOTFS_TREE/usr/resource/litegui/theme2/stream_media/spotui_s.png"
 
 echo "[3/9] Creating the private-data-free SD runtime payload"
 mkdir -p "$PAYLOAD"
@@ -319,7 +323,15 @@ find "$INSTALLER_DIR" -maxdepth 1 -type f -exec \
 touch -d "$BASE_TIMESTAMP UTC" \
     "$ROOTFS_TREE/etc/init.d/S99spotui-provision" \
     "$ROOTFS_TREE/usr/bin/hiby_player" \
-    "$ROOTFS_TREE/usr/bin/hiby_player.sh"
+    "$ROOTFS_TREE/usr/bin/hiby_player.sh" \
+    "$ROOTFS_TREE/usr/resource/layout/theme1/hiby_stream_media.view" \
+    "$ROOTFS_TREE/usr/resource/layout/theme1/hiby_stream_media_cn.view" \
+    "$ROOTFS_TREE/usr/resource/layout/theme2/hiby_stream_media.view" \
+    "$ROOTFS_TREE/usr/resource/layout/theme2/hiby_stream_media_cn.view" \
+    "$ROOTFS_TREE/usr/resource/litegui/theme1/stream_media/spotui.png" \
+    "$ROOTFS_TREE/usr/resource/litegui/theme1/stream_media/spotui_s.png" \
+    "$ROOTFS_TREE/usr/resource/litegui/theme2/stream_media/spotui.png" \
+    "$ROOTFS_TREE/usr/resource/litegui/theme2/stream_media/spotui_s.png"
 
 for language in \
     english french german italy japanese korean poland russian \
@@ -469,15 +481,39 @@ unsquashfs -s "$VERIFY_ROOTFS" | grep -q "Block size 131072" ||
 [ "$(hash_from_rootfs "$VERIFY_ROOTFS" etc/init.d/S99spotui-provision)" = "$(hash_file "$PROVISIONER")" ] ||
     fail "packaged background provisioner mismatch"
 
+[ "$(hash_from_rootfs "$VERIFY_ROOTFS" usr/resource/layout/theme1/hiby_stream_media.view)" = "$EXPECTED_LAYOUT_THEME1_SHA256" ] ||
+    fail "packaged theme1 Stream Media layout mismatch"
+[ "$(hash_from_rootfs "$VERIFY_ROOTFS" usr/resource/layout/theme1/hiby_stream_media_cn.view)" = "$EXPECTED_LAYOUT_THEME1_CN_SHA256" ] ||
+    fail "packaged theme1 CN Stream Media layout mismatch"
+[ "$(hash_from_rootfs "$VERIFY_ROOTFS" usr/resource/layout/theme2/hiby_stream_media.view)" = "$EXPECTED_LAYOUT_THEME2_SHA256" ] ||
+    fail "packaged theme2 Stream Media layout mismatch"
+[ "$(hash_from_rootfs "$VERIFY_ROOTFS" usr/resource/layout/theme2/hiby_stream_media_cn.view)" = "$EXPECTED_LAYOUT_THEME2_CN_SHA256" ] ||
+    fail "packaged theme2 CN Stream Media layout mismatch"
+
+for icon in \
+    theme1/spotui.png \
+    theme1/spotui_s.png \
+    theme2/spotui.png \
+    theme2/spotui_s.png
+do
+    ICON_PATH="usr/resource/litegui/${icon%/*}/stream_media/${icon##*/}"
+
+    [ "$(hash_from_rootfs "$VERIFY_ROOTFS" "$ICON_PATH")" = \
+      "$(hash_file "$REPO_ROOT/engine/launcher/resources/spotui/$icon")" ] ||
+        fail "packaged SpotUI icon mismatch: $icon"
+done
+
 for icon in \
     theme1/qobuz.png \
     theme1/qobuz_s.png \
     theme2/qobuz.png \
     theme2/qobuz_s.png
 do
-    [ "$(hash_from_rootfs "$VERIFY_ROOTFS" "usr/resource/litegui/${icon%/*}/stream_media/${icon##*/}")" = \
-      "$(hash_file "$REPO_ROOT/engine/launcher/resources/spotui/$icon")" ] ||
-        fail "packaged SpotUI icon mismatch: $icon"
+    ICON_PATH="usr/resource/litegui/${icon%/*}/stream_media/${icon##*/}"
+
+    [ "$(hash_from_rootfs "$VERIFY_ROOTFS" "$ICON_PATH")" = \
+      "$(hash_from_rootfs "$ORIGINAL_ROOTFS" "$ICON_PATH")" ] ||
+        fail "packaged Qobuz artwork changed unexpectedly: $icon"
 done
 
 for installer_file in SHA256SUMS VERSION PAYLOAD_BYTES spotui-runtime.tar.xz.sha256; do
