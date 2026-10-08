@@ -47,6 +47,8 @@ const VOL_INPUT_PATH: &str = "/dev/input/event2";
 const KEY_VOLUMEUP: u16 = 0x73;
 const KEY_VOLUMEDOWN: u16 = 0x72;
 const EVENT_SIZE: usize = 16; // 32-bit input_event: 8 (time) + 2 + 2 + 4
+// Linux EVIOCGRAB = _IOW('E', 0x90, int), verified against the target MIPS UAPI.
+const EVIOCGRAB: libc::c_ulong = 0x8004_4590;
 const EV_KEY: u16 = 0x01;
 const EV_ABS: u16 = 0x03;
 const EV_SYN: u16 = 0x00;
@@ -3738,6 +3740,22 @@ fn main() {
         }
     };
     let input_fd = input.as_raw_fd();
+
+    // Exclusively grab the touchscreen while SpotUI owns the display.  Without
+    // this, hiby_player (while SIGSTOPped) can accumulate copies of SpotUI
+    // touches and process them after SIGCONT.
+    let grab_result = unsafe {
+        libc::ioctl(input_fd, EVIOCGRAB as _, 1 as libc::c_int)
+    };
+    if grab_result < 0 {
+        eprintln!(
+            "[poc] EVIOCGRAB failed on {INPUT_PATH}: {}",
+            std::io::Error::last_os_error()
+        );
+    } else {
+        eprintln!("[poc] touchscreen grabbed exclusively");
+    }
+
     // Set non-blocking.
     unsafe {
         let flags = libc::fcntl(input_fd, libc::F_GETFL, 0);

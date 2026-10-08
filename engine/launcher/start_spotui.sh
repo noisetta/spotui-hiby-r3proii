@@ -4,11 +4,11 @@
 # Startup ORDER matters. The panel blanks after ~20s of no framebuffer writes,
 # and once blanked this (SPI ST7701) panel can't be woken from software. The
 # UI's continuous refresh keeps it lit -- but only once the UI is running. So
-# we must launch the UI IMMEDIATELY after killing hiby_player, before the long
+# we must launch the UI IMMEDIATELY after suspending hiby_player, before the long
 # WiFi/daemon startup, or the panel blanks during that gap and stays black.
 #
 # Order:
-#   1. kill hiby_player       (frees DAC + framebuffer)
+#   1. suspend hiby_player    (preserves stock HiBy/HGL state)
 #   2. launch UI in background (panel stays lit via its refresh; UI shows
 #                              "Connecting..." and retries LIKED until daemon up)
 #   3. DNS + wait for WiFi
@@ -119,11 +119,38 @@ done
 
 echo "[start] readiness gate passed (${up}s)"
 
-# --- 1. Kill hiby_player -----------------------------------------------------
-for pid in $(ps | grep hiby_player | grep -v grep | awk '{print $1}'); do
-    kill "$pid" 2>/dev/null
+# --- 1. Suspend hiby_player -----------------------------------------------
+HIBY_PID=$(pidof hiby_player 2>/dev/null | awk '{ print $1 }')
+
+if [ -z "$HIBY_PID" ]; then
+    echo "[start] ERROR: hiby_player not running"
+    exit 1
+fi
+
+echo "$HIBY_PID" > /tmp/spotui-hiby-suspended.pid
+
+echo "[start] suspending hiby_player pid=$HIBY_PID"
+kill -STOP "$HIBY_PID"
+
+i=0
+while [ "$i" -lt 20 ]; do
+    state=$(awk "/^State:/ { print \$2 }" "/proc/$HIBY_PID/status" 2>/dev/null)
+
+    [ "$state" = "T" ] && break
+
+    sleep 0.05
+    i=$((i + 1))
 done
-echo "[start] hiby_player stopped"
+
+state=$(awk "/^State:/ { print \$2 }" "/proc/$HIBY_PID/status" 2>/dev/null)
+
+if [ "$state" != "T" ]; then
+    echo "[start] ERROR: hiby_player failed to suspend"
+    rm -f /tmp/spotui-hiby-suspended.pid
+    exit 1
+fi
+
+echo "[start] hiby_player suspended"
 
 # --- 2. Launch the UI IMMEDIATELY (keeps the panel lit) ----------------------
 # It comes up showing "Connecting..." and retries the liked-songs fetch every
@@ -136,7 +163,7 @@ echo "[start] UI launched (pid $UI_PID)"
 # --- 3. DNS + bring up WiFi + wait -------------------------------------------
 printf 'nameserver 1.1.1.1\nnameserver 8.8.8.8\n' > /tmp/resolv.conf
 
-# hiby_player normally associates WiFi; since we've killed it, we must bring
+# hiby_player normally associates WiFi; since we've suspended it, we must bring
 # WiFi up ourselves. Start wpa_supplicant against the saved config (unless it's
 # already running), then request a DHCP lease. A cold boot can leave udhcpc
 # associated but sending unanswered discovery packets indefinitely, so keep a
