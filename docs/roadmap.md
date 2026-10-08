@@ -1,82 +1,120 @@
 # Roadmap
 
-SpotUI is currently a `0.1.0-beta.2` experimental tester beta for the HiBy R3
-Pro II. This roadmap is intentionally conservative: stability, documentation,
-and recovery come before convenience features.
+SpotUI is under active development for the HiBy R3 Pro II.
+
+The current device-tested development checkpoint is
+`0.1.0-beta.5-test.4`. The latest publicly packaged tester prerelease remains
+`0.1.0-beta.2`.
+
+This roadmap is intentionally conservative: stability, recovery, documentation,
+and reproducible device testing take priority over convenience features.
 
 ## Current status
 
-- Public source repository with a separately attached, experimental tester
-  prerelease.
+- Public source repository with separately packaged experimental tester
+  prereleases.
 - Tested primarily on the HiBy R3 Pro II.
-- The tester bundle uses a two-file SD-card installation and a separate Linux
-  OAuth onboarding step; it is not a one-click installer.
+- Current source development is ahead of the latest packaged public prerelease.
+- The tester installation uses a two-file SD-card firmware/runtime pair plus a
+  separate desktop Spotify authorization step; it is not a one-click installer.
 - Firmware and runtime artifacts are release assets, not Git-tracked source
   files.
-- The current UI is designed around large, simple touch rows for reliable use on the device screen.
+- SpotUI launches manually from its own dedicated stock-interface tile while
+  preserving Qobuz.
+- Early launch requests receive native **Preparing SpotUI...** feedback while a
+  guarded readiness check waits for the stock player and audio hardware.
+- Normal SpotUI exit resumes the existing stock HiBy player instead of
+  rebooting the device.
+- The UI remains designed around large, simple touch targets for reliable use
+  on the compact player screen.
 
 ## Recently completed
+
+### Playback and library
 
 - Added queued playback for Liked Songs, playlists, and search results.
 - Added latest-tap-wins track selection and responsive, tap-safe Search.
 - Added persistent recent-search history with newest-first ordering,
   deduplication, one-tap reruns, and clear-history control.
+- Expanded Library discovery beyond the previous eight-entry limit and added
+  complete playlist-name resolution.
 - Added queue-aware Previous, Next, and Up Next controls.
 - Added a dedicated Now Playing screen with larger metadata, elapsed and
   remaining time, seeking, playback controls, and direct queue access.
 - Expanded Now Playing with themed track artwork, queue and playback-mode
   context, output status, larger controls, and clearer time information.
-- Preserved the active queue and retried the current track after a first
-  transient Spotify unavailable event.
 - Added persistent shuffle and repeat modes.
 - Added touchscreen seeking and hardware volume feedback.
+- Preserved the active queue and retried the current track after a first
+  transient Spotify unavailable event.
+- Added automatic search-result invalidation and refresh after a supervised
+  daemon restart.
+
+### Interface and device behavior
+
 - Added ten redesigned themes with adaptive ambient motion.
 - Added a staged startup status screen and supervised daemon recovery.
-- Added automatic search-result invalidation and refresh after a supervised
-  daemon restart, preventing stale result queues from remaining tappable.
-- Added elapsed startup timing and stage-specific Wi-Fi, Spotify, and library
+- Added elapsed startup timing and stage-specific WiFi, Spotify, and library
   retry controls.
 - Added live WiFi, Spotify, audio, output, and queue diagnostics.
 - Added an on-device version identifier in Diagnostics.
+- Added persistent brightness settings.
 - Added persistent 30-second, 60-second, 2-minute, 5-minute, and Never
   screen-sleep settings with safe touch and power-button wake while audio
   continues.
-- Tested early stock-side launch feedback and retained the manual, audio-safe
-  handoff after framebuffer contention made the prototype unsuitable.
 - Verified cold-start playback and automatic 3.5 mm/4.4 mm routing.
-- Added a guarded local firmware builder with pre-build and packaged-image integrity checks.
+
+### Stock HiBy integration
+
+- Replaced the stock player's unreliable fork-based launch callback with a
+  prestarted lightweight SpotUI launch broker.
+- Added a dedicated SpotUI launcher tile while preserving the stock Qobuz
+  service tile.
+- Added dedicated SpotUI artwork for both HiBy themes.
+- Added native **Preparing SpotUI...** feedback for early launch requests.
+- Added a guarded readiness gate that waits for the stock player, framebuffer,
+  ALSA controls, mixer stability, and minimum initialization state before
+  handing control to SpotUI.
+- Replaced the normal reboot-on-exit path with a suspend/resume handoff that
+  preserves the existing `hiby_player` process.
+- Added exclusive touchscreen grabbing while SpotUI is active so touch events
+  are not replayed into the suspended stock interface after return.
+- Added delayed broker re-arming after return as an additional safeguard
+  against queued-input races.
+- Verified repeated SpotUI launch/exit cycles and return to the stock HiBy
+  interface without rebooting.
+
+### Installation, recovery, and release engineering
+
+- Added a guarded local firmware builder with pre-build and packaged-image
+  integrity checks.
 - Documented the verified local firmware build workflow.
-- Added final stock-matched SpotUI launcher artwork for both HiBy themes.
-- Changed the visible Qobuz launcher caption to SpotUI while preserving internal widget and localization keys.
-- Verified early-launch readiness, SpotUI startup, and audio playback on-device.
-- Added persistent brightness settings across SpotUI launches.
-- Documented the tested UI and daemon cross-build and deployment workflow.
+- Added and device-tested a guarded two-file HMOD v1.5 installer builder with
+  low-memory runtime extraction and exact-input validation.
+- Added managed runtime upgrades for verified existing SpotUI installations,
+  while retaining refusal behavior for unrecognized runtime state.
+- Added and device-tested private desktop OAuth onboarding with atomic ADB
+  credential installation, strict permissions, and device-local rollback.
+- Documented tested UI and daemon cross-build and deployment workflows.
 - Expanded recovery, rollback, and common failure troubleshooting procedures.
 - Added a developer beta installation guide with prerequisites, validation,
   limitations, and rollback guidance.
-- Added and device-tested a guarded two-file HMOD v1.5 installer builder with
-  low-memory runtime extraction, exact-input validation, and safe repeat-boot
-  behavior.
-- Added and device-tested private desktop OAuth onboarding with atomic ADB
-  credential installation, strict permissions, and device-local rollback.
-- Expanded Library discovery beyond the previous eight-entry limit and added
-  complete playlist-name resolution.
-- Replaced the stock player's unreliable fork-based SpotUI tile callback with
-  a prestarted lightweight launch broker, verified during active and paused
-  stock playback.
-- Completed a full release-candidate regression covering all playback sources,
-  rapid selection, automatic advancement, controls, search recovery,
-  sleep/wake, headphone reconnection, UI-only restart, full reboot, settings
-  persistence, themes, menus, Now Playing, Up Next, and Diagnostics.
+- Completed repeated cold-boot, launch/exit, playback, handoff, touchscreen,
+  provisioning, and integrity validation for the
+  `0.1.0-beta.5-test.4` development checkpoint.
 
 ## Current development priorities
 
-- Continue small, device-tested playback and navigation improvements.
-- Keep public setup, recovery, and feature documentation synchronized with
-  tested milestones.
-- Preserve and publish verifiable release-candidate hashes without adding
-  credentials or user-specific device files, while clearly identifying the
-  licensing boundary around proprietary firmware components.
+- Continue small, device-tested playback, navigation, and interface
+  improvements.
+- Keep setup, testing, recovery, release, and roadmap documentation synchronized
+  with validated development checkpoints.
+- Preserve a clear distinction between device-tested development checkpoints
+  and privacy-reviewed public release bundles.
+- Continue validating the suspend/resume stock-player handoff before making
+  additional low-level framebuffer or launcher changes.
+- Preserve reproducible hashes and release provenance without adding
+  credentials or user-specific device files.
 
 ## Next planned improvements
 
@@ -93,29 +131,30 @@ and recovery come before convenience features.
 
 - Distinguish network, Spotify-session, daemon-restart, and audio-output
   recovery states more clearly in Diagnostics and logs.
-- Record concise, privacy-safe troubleshooting steps that users can include in
-  issue reports without exposing account or network credentials.
-- Continue targeted recovery tests when a real, reproducible failure is found,
-  while preserving the current simple supervised design.
+- Record concise, privacy-safe troubleshooting steps that testers can include
+  in issue reports without exposing account or network credentials.
+- Continue targeted recovery testing when a real, reproducible failure is
+  found rather than adding speculative workarounds.
+- If the intermittent stale-framebuffer return condition reappears, capture
+  framebuffer pan state and handoff logs before introducing a page-restoration
+  change.
 
 ### Installation and release safety
 
 - Add host and device preflight checks for model, storage, expected files,
   binary architecture, and rollback readiness.
-- Define a compatibility matrix as additional firmware revisions or devices
-  are tested by owners.
-- Explore a patch-only workflow based on a user-supplied stock image, without
+- Define a compatibility matrix as additional firmware revisions or devices are
+  tested by owners.
+- Explore a patch-only workflow based on a user-supplied stock image without
   redistributing proprietary firmware.
+- Prepare future public tester releases through the privacy-gated release
+  workflow and validate the exact archive intended for distribution.
 
 ### Platform integration research
 
-- Profile the HiBy_OS handoff and investigate a faster path from tapping the
-  launcher tile to seeing SpotUI, without bypassing the codec and mixer
-  readiness checks that protect headphone audio.
-- Investigate deeper stock-side launch feedback or integration that remains
-  responsive while the safe handoff is pending.
-- Design and validate a fully dedicated SpotUI launcher icon and identity in
-  place of the current Qobuz-derived SpotUI integration.
+- Profile the guarded HiBy handoff and investigate whether launch latency can
+  be reduced without bypassing the codec and mixer readiness checks that
+  protect headphone audio.
 - Evaluate Bluetooth audio-output support, including pairing assumptions,
   routing, reconnection, status reporting, and playback behavior.
 - Investigate whether HiBy MSEB tuning can be exposed safely inside SpotUI,
@@ -136,29 +175,31 @@ and recovery come before convenience features.
 
 SpotUI's librespot playback authentication can read the user's Liked Songs but
 cannot request Spotify's separate `user-library-modify` Web API permission.
+
 Like and unlike controls are therefore intentionally not included. A future
 implementation would require a separate OAuth flow and user-supplied Spotify
 developer application configuration.
 
-## Launcher limitation
+## Launcher and handoff behavior
 
 The stock HiBy player must finish initializing the codec and mixer before
-SpotUI takes over. A cold manual launch can therefore leave the stock interface
-visible for tens of seconds before SpotUI's own loading page appears. The
-nonblocking launcher accepts the request once and ignores repeated taps while
-it waits.
+SpotUI takes control.
 
-A tested framebuffer-only preparation page was not retained: the proprietary
-stock interface continuously flips and redraws its framebuffer pages, causing
-the two interfaces to flicker and leaving stale frames visible. Refreshing the
-prototype aggressively enough to dominate the display would add load during
-the audio-critical initialization period. A clean stock-side status dialog
-would require deeper, firmware-specific integration with the proprietary HiBy
-interface.
+If SpotUI is requested early after a cold boot, the stock interface displays a
+native **Preparing SpotUI...** message while the launcher waits for its guarded
+readiness conditions. The request is retained; repeated tapping is not
+required.
 
-SpotUI also does not take over automatically after every reboot. Automatic
-takeover would interrupt users who intend to use the stock player, so manual
-launching remains the deliberate default.
+Once ready, SpotUI suspends the existing `hiby_player` process rather than
+terminating it. On normal exit, SpotUI shuts down its own UI, daemon, and
+playback process, then resumes the suspended stock player.
+
+SpotUI exclusively grabs the touchscreen while active so touches made inside
+SpotUI are not later delivered to the stock interface when it resumes.
+
+Automatic SpotUI takeover after reboot remains deliberately disabled. Users
+can therefore continue using the stock HiBy player normally unless they
+explicitly launch SpotUI.
 
 ## Not planned right now
 
