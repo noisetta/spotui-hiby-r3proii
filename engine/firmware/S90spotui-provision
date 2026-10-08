@@ -11,6 +11,7 @@ MANIFEST=$INSTALLER/SHA256SUMS
 PAYLOAD_BYTES_FILE=$INSTALLER/PAYLOAD_BYTES
 VERSION_FILE=$INSTALLER/VERSION
 STAGE=$DEST/.spotui-install-stage
+BACKUP=$DEST/.spotui-install-backup
 LOG=${SPOTUI_PROVISION_LOG:-/tmp/spotui-provision.log}
 LOCK=${SPOTUI_PROVISION_LOCK:-/tmp/spotui-provision.lock}
 WAIT_SECONDS=${SPOTUI_PROVISION_WAIT_SECONDS:-60}
@@ -87,53 +88,86 @@ do
 done
 
 all_present=1
+any_present=0
+all_match=1
+
 for file in $FILES; do
     if [ ! -f "$DEST/$file" ]; then
         all_present=0
     fi
-done
 
-if [ "$all_present" -eq 1 ] &&
-   [ -f "$DEST/spotui-runtime-version" ] &&
-   [ -f "$DEST/spotui-runtime-SHA256SUMS" ] &&
-   cmp -s "$VERSION_FILE" "$DEST/spotui-runtime-version" &&
-   cmp -s "$MANIFEST" "$DEST/spotui-runtime-SHA256SUMS"; then
-    if ! ensure_runtime_permissions; then
-        log "could not enforce runtime permissions"
-        exit 1
-    fi
-    log "installed runtime metadata already matches packaged version"
-    exit 0
-fi
-
-any_present=0
-all_match=1
-for file in $FILES; do
     if [ -e "$DEST/$file" ]; then
         any_present=1
     fi
+
     if ! hash_matches "$file" "$DEST/$file"; then
         all_match=0
     fi
 done
 
+# If every live runtime file matches the packaged manifest, the installation is
+# already current. Refresh metadata rather than relying on metadata alone.
 if [ "$all_match" -eq 1 ]; then
     if ! ensure_runtime_permissions; then
         log "could not enforce runtime permissions"
         exit 1
     fi
+
     if ! cp "$VERSION_FILE" "$DEST/spotui-runtime-version" ||
        ! cp "$MANIFEST" "$DEST/spotui-runtime-SHA256SUMS"; then
         log "could not refresh runtime metadata"
         exit 1
     fi
+
     log "runtime already matches packaged version"
     exit 0
 fi
 
+# A differing existing runtime may be upgraded automatically only if it is a
+# complete, self-consistent installation previously managed by SpotUI.
+managed_runtime=0
+
 if [ "$any_present" -eq 1 ]; then
-    log "existing SpotUI runtime is incomplete or differs; refusing automatic overwrite"
-    exit 1
+    if [ "$all_present" -eq 1 ] &&
+       [ -f "$DEST/spotui-runtime-version" ] &&
+       [ -f "$DEST/spotui-runtime-SHA256SUMS" ]; then
+
+        managed_runtime=1
+
+        case "$(cat "$DEST/spotui-runtime-version" 2>/dev/null)" in
+            spotui-*)
+                ;;
+            *)
+                managed_runtime=0
+                ;;
+        esac
+
+        if [ "$managed_runtime" -eq 1 ]; then
+            for file in $FILES; do
+                expected=$(awk -v name="$file" "\$2 == name { print \$1 }" \
+                    "$DEST/spotui-runtime-SHA256SUMS")
+
+                if [ -z "$expected" ]; then
+                    managed_runtime=0
+                    break
+                fi
+
+                actual=$(sha256sum "$DEST/$file" | awk "{ print \$1 }")
+
+                if [ "$actual" != "$expected" ]; then
+                    managed_runtime=0
+                    break
+                fi
+            done
+        fi
+    fi
+
+    if [ "$managed_runtime" -ne 1 ]; then
+        log "existing SpotUI runtime is incomplete or differs; refusing automatic overwrite"
+        exit 1
+    fi
+
+    log "verified managed existing runtime; upgrade permitted"
 fi
 
 wait_count=0
@@ -232,9 +266,100 @@ for file in $FILES; do
     fi
 done
 
+upgrade_backup_ready=0
+
+cleanup_partial_runtime() {
+    for file in $FILES; do
+        rm -f "$DEST/$file"
+    done
+
+    rm -f \
+        "$DEST/spotui-runtime-version" \
+        "$DEST/spotui-runtime-SHA256SUMS"
+}
+
+restore_runtime_backup() {
+    restore_failed=0
+
+    for file in $FILES; do
+        if [ ! -f "$BACKUP/$file" ] ||
+           ! cp -p "$BACKUP/$file" "$DEST/$file"; then
+            restore_failed=1
+        fi
+    done
+
+    for metadata in \
+        spotui-runtime-version \
+        spotui-runtime-SHA256SUMS
+    do
+        if [ ! -f "$BACKUP/$metadata" ] ||
+           ! cp -p "$BACKUP/$metadata" "$DEST/$metadata"; then
+            restore_failed=1
+        fi
+    done
+
+    [ "$restore_failed" -eq 0 ]
+}
+
+rollback_activation() {
+    if [ "$upgrade_backup_ready" -eq 1 ]; then
+        if restore_runtime_backup; then
+            log "restored previous managed runtime after activation failure"
+        else
+            log "CRITICAL: could not fully restore previous managed runtime"
+        fi
+    else
+        cleanup_partial_runtime
+    fi
+
+    rm -rf "$BACKUP"
+}
+
+# Preserve a complete verified managed runtime before replacing any live file.
+if [ "$managed_runtime" -eq 1 ]; then
+    rm -rf "$BACKUP"
+
+    if ! mkdir -p "$BACKUP"; then
+        log "could not create runtime backup directory"
+        rm -rf "$STAGE"
+        exit 1
+    fi
+
+    backup_failed=0
+
+    for file in $FILES; do
+        if ! cp -p "$DEST/$file" "$BACKUP/$file"; then
+            backup_failed=1
+            break
+        fi
+    done
+
+    if [ "$backup_failed" -eq 0 ]; then
+        for metadata in \
+            spotui-runtime-version \
+            spotui-runtime-SHA256SUMS
+        do
+            if ! cp -p "$DEST/$metadata" "$BACKUP/$metadata"; then
+                backup_failed=1
+                break
+            fi
+        done
+    fi
+
+    if [ "$backup_failed" -ne 0 ]; then
+        log "could not create complete managed-runtime backup"
+        rm -rf "$BACKUP" "$STAGE"
+        exit 1
+    fi
+
+    upgrade_backup_ready=1
+    log "previous managed runtime backed up"
+fi
+
 for file in $FILES; do
     if ! mv "$STAGE/$file" "$DEST/$file"; then
         log "could not activate runtime file: $file"
+        rollback_activation
         rm -rf "$STAGE"
         exit 1
     fi
@@ -243,15 +368,19 @@ done
 if ! cp "$VERSION_FILE" "$DEST/spotui-runtime-version" ||
    ! cp "$MANIFEST" "$DEST/spotui-runtime-SHA256SUMS"; then
     log "could not install runtime metadata"
+    rollback_activation
     rm -rf "$STAGE"
     exit 1
 fi
+
 if ! ensure_runtime_permissions; then
     log "could not enforce installed runtime permissions"
+    rollback_activation
     rm -rf "$STAGE"
     exit 1
 fi
-rm -rf "$STAGE"
+
+rm -rf "$STAGE" "$BACKUP"
 
 log "installed runtime $(cat "$VERSION_FILE")"
 exit 0
