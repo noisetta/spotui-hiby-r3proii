@@ -7,11 +7,15 @@
 > included recovery guidance before flashing. Locally rebuilt output must not
 > be distributed until it completes the same review and device-validation gate.
 
+The current device-tested development checkpoint is
+`0.1.0-beta.5-test.4`. The latest publicly packaged tester prerelease remains
+`0.1.0-beta.2`.
+
 The tester installer converts the exact published HiBy Mods v1.5 firmware for
-the HiBy R3 Pro II into a two-file SpotUI beta installer. Testers copy the
-firmware and its matched runtime archive to the SD card. The builder does not
-download firmware, flash a device, or include Spotify credentials, WiFi
-configuration, cache contents, or device-specific files.
+the HiBy R3 Pro II into a two-file SpotUI installer. Testers copy the firmware
+and its matched runtime archive to the SD card. The builder does not download
+firmware, flash a device, or include Spotify credentials, WiFi configuration,
+cache contents, or device-specific files.
 
 ## Supported firmware input
 
@@ -38,32 +42,54 @@ credit, and warranty language when preparing any SpotUI release.
 
 The generated image:
 
-- preserves the verified HMOD v1.5 kernel and player modifications;
-- applies only the reviewed 79-byte SpotUI launcher delta to `hiby_player`;
-- signals a prestarted lightweight broker without forking the stock player;
+- preserves the verified HMOD v1.5 kernel and inherited player modifications;
+- applies the reviewed SpotUI integration to the known `hiby_player` binary;
+- signals a prestarted lightweight launch broker without forking the stock
+  player;
 - retains the original backup player;
-- prevents the stock wrapper from rebooting during an intentional SpotUI
-  launcher handoff;
-- changes the visible Qobuz tile artwork and caption to SpotUI;
+- adds a dedicated SpotUI launcher tile while preserving the existing Qobuz
+  service tile;
+- adds dedicated SpotUI artwork for both stock HiBy themes;
+- adds native **Preparing SpotUI...** feedback for launch requests received
+  before the guarded readiness gate is satisfied;
+- preserves normal stock-player use when SpotUI is not active;
 - emits a separate compressed, private-data-free SpotUI runtime archive;
-- stores only the runtime hashes, size, and version in the firmware rootfs;
+- stores verified runtime manifest metadata and version information in the
+  firmware rootfs;
 - starts the stock player before launching a low-priority background
   provisioner;
-- provisions the SD-card runtime archive into `/usr/data` without blocking
-  boot;
-- retains manual launch through the repurposed Qobuz tile;
+- provisions or upgrades a verified managed SpotUI runtime under `/usr/data`
+  without blocking normal boot;
 - does not enable SpotUI autostart or force always-on ADB.
 
-The provisioner installs only when all six runtime targets are absent. If
-existing files are complete and match the release manifest, it leaves them in
-place. If an existing runtime is incomplete or differs, it refuses to
-overwrite anything. SD waiting, hashing, and extraction happen in a
+The provisioner recognizes three broad runtime states:
+
+1. **Matching managed runtime** — the installed runtime already matches the
+   packaged manifest, so it is left in place.
+2. **Older verified managed runtime** — the existing installation is validated,
+   backed up, and upgraded to the matched packaged runtime.
+3. **Unrecognized or unsafe runtime state** — the provisioner refuses to
+   overwrite it automatically.
+
+Unrelated `/usr/data` contents, Spotify credentials, WiFi configuration, and
+user-specific files are not part of the managed runtime upgrade.
+
+SD-card waiting, hashing, validation, backup, and extraction happen in a
 low-priority background worker after `hiby_player` starts. The worker records
 its result in:
 
 ```text
 /tmp/spotui-provision.log
 ```
+
+SpotUI launch itself is readiness-gated. Once the stock player and audio
+hardware are ready, the launcher suspends the existing `hiby_player` process
+for the SpotUI session.
+
+Normal SpotUI exit shuts down the SpotUI UI, daemon, and playback process,
+then resumes the same stock player instead of rebooting the device. SpotUI
+also takes exclusive ownership of the touchscreen while active so touch input
+is not replayed into the suspended stock interface after return.
 
 ## Build inputs
 
@@ -85,17 +111,18 @@ tools/installer/build_spotui_tester_upt.sh \
     --ui engine/ui/target/mipsel-unknown-linux-musl/release/spotui-ui-poc \
     --daemon /path/to/librespot/target/mipsel-unknown-linux-musl/release/examples/spotui_daemon \
     --loader /path/to/ld-musl-mipsel-sf.so.1 \
-    --output /path/to/r3proii-hmod-1.5-spotui-0.1.0-beta.2.upt \
+    --output /path/to/r3proii-hmod-1.5-spotui-0.1.0-beta.5-test.4.upt \
     --runtime-output /path/to/spotui-runtime.tar.xz
 ```
 
 Neither output path may already exist. The builder:
 
 1. verifies and extracts HMOD v1.5;
-2. patches only the known player, wrapper, labels, and launcher artwork;
+2. applies the reviewed SpotUI player, localization, launcher, artwork,
+   provisioner, and handoff integration;
 3. builds a reproducible compressed runtime archive for the SD card;
-4. adds only its verified metadata and the guarded background provisioner to
-   the firmware;
+4. adds its verified metadata and guarded background provisioner to the
+   firmware;
 5. rebuilds the LZO SquashFS within the root partition limit;
 6. regenerates the OTA chunk chain and manifest;
 7. packages the `.upt`;
@@ -110,6 +137,67 @@ Generated `.upt` images, runtime archives, and runtime binaries must not be
 committed to the Git-tracked source tree. An exact, device-tested
 firmware/runtime pair may instead be attached to a clearly marked GitHub
 prerelease with its hashes, provenance, notices, and recovery warning.
+
+The current `0.1.0-beta.5-test.4` checkpoint is a device-tested development
+build, not a reviewed public release bundle.
+
+## SpotUI 0.1.0-beta.5-test.4 development-checkpoint validation
+
+The `beta.5-test.4` development checkpoint adds the dedicated SpotUI launcher,
+native preparation feedback, guarded startup readiness, suspend/resume return
+to the stock player, managed runtime upgrades, and exclusive touchscreen input
+ownership.
+
+The exact packaged development pair completed repeated launch/exit, cold-boot,
+playback, handoff, provisioning, touchscreen, and integrity testing on the
+maintainer HiBy R3 Pro II on 2026-10-08:
+
+```text
+Firmware SHA-256: 0cb6a9a2556906cf55d7f68e7963ea8b615c36f148d6d58623dfaf2054895617
+Firmware MD5:     0e6e35bf5ccb36202c328790137b934d
+Runtime SHA-256:  fb617b091da44a2bb71b78cbf73ebec35707021c826bfe29f7101f0c13758b9b
+Rootfs SHA-256:   a34106879bac9bf6c4ef4fffeeafca8b62a036b8d44fbb784f7ab353bbe98f6c
+Rootfs MD5:       5ccc8bd6c7b6698d83b2ffde71fc6c08
+Rootfs size:      37376000 bytes
+UI SHA-256:       813a17788376b04ae20cbae7a2efeb9ca6e06d964e6b31432d9601d15c4b4226
+Daemon SHA-256:   e368c922075c251f527a5dc2e6a9fc2b72b8f84f0f8647d7257dd9966aee0ed5
+Loader SHA-256:   ad3247d5c5a22ee0076c28c5e80b841ea24c604687a855997b9eb8aa77db4d37
+Return SHA-256:   a7ef050ed7c193d863a7103204e733170fb2cb73da3c6620b47ac76e21020248
+Player SHA-256:   b3e787645d86bcf887699f53810e456bb8b7e9cd975014b46e421996255ae520
+```
+
+The packaged runtime identifies itself as:
+
+```text
+spotui-0.1.0-beta.5-test.4+hmod-1.5
+```
+
+The provisioner successfully recognized the prior managed runtime, preserved a
+rollback copy, and installed the matched test.4 runtime.
+
+The dedicated SpotUI tile and stock Qobuz tile remained available
+independently.
+
+During final packaged-build testing, repeated SpotUI launch/exit cycles
+returned directly to the resumed stock HiBy interface without rebooting.
+Exclusive touchscreen grabbing prevented SpotUI touch events from being
+replayed into the suspended stock interface, and no unintended immediate
+SpotUI relaunches were observed during the final test cycles.
+
+An intermittent stale-framebuffer return condition seen once during earlier
+development testing could not be reproduced during final test.4 validation.
+No speculative framebuffer-page workaround was therefore added.
+
+This checkpoint is a device-tested development build, not a privacy-reviewed
+public tester release. The latest packaged public prerelease remains
+`0.1.0-beta.2`.
+
+## Historical validation records
+
+The following sections preserve validation results for earlier exact builds.
+Descriptions of launcher, provisioning, or exit behavior in these records
+apply to those builds and should not be interpreted as the current installer
+behavior described above.
 
 ## Maintainer device-validation record
 
@@ -248,39 +336,81 @@ WiFi, or enable ADB permanently.
 
 ## Controlled device-test sequence
 
-### Stage 1: existing matching runtime
+Use the exact firmware/runtime pair being evaluated. Keep a verified copy of
+the currently working runtime and official recovery firmware before changing
+the device.
 
-1. Pause playback and confirm `aplay` has exited.
-2. Archive the active UI, daemon, loader, three launcher scripts, and their
-   hashes on the laptop.
-3. Record the active firmware, player, rootfs, kernel, and `/usr/data` hashes.
-4. Keep official stock recovery firmware for the exact R3 Pro II available.
-5. Copy the verified firmware to the SD card as `r3proii.upt` and its matched
-   runtime archive as `spotui-runtime.tar.xz`.
+### Stage 1: existing matching managed runtime
+
+1. Pause playback and confirm the SpotUI playback subprocess has exited.
+2. Archive the active UI, daemon, loader, launcher scripts, and runtime
+   metadata together with their hashes.
+3. Record the active firmware, player, rootfs, kernel, runtime version, and
+   available `/usr/data` space.
+4. Keep official recovery firmware for the exact R3 Pro II available.
+5. Copy the verified candidate firmware to the SD card as `r3proii.upt` and
+   its matched runtime archive as `spotui-runtime.tar.xz`.
 6. Flash it with the normal R3 Pro II firmware update procedure.
 7. Let the device boot into the stock HiBy interface; do not launch SpotUI yet.
-8. Enable ADB manually from HMOD's About screen.
-9. Confirm that the stock UI appears before provisioning work and that
-   `/tmp/spotui-provision.log` reports the runtime already matches the
-   packaged version.
-10. Verify the active runtime, player, kernel, installer, and payload hashes.
-11. Launch SpotUI and run the complete beta regression.
-12. Exit SpotUI and confirm the normal reboot path.
+8. Enable ADB manually from HMOD when required for validation.
+9. Inspect `/tmp/spotui-provision.log` and confirm that the existing runtime
+   is recognized as matching the packaged managed runtime.
+10. Verify the active runtime, player, kernel, provisioner, version metadata,
+    and critical packaged hashes.
+11. Tap the dedicated SpotUI tile.
+12. If the readiness gate is still pending, confirm that native
+    **Preparing SpotUI...** feedback appears.
+13. Run the complete beta regression.
+14. Exit SpotUI normally and confirm that the existing stock HiBy interface
+    returns visibly and responsively without rebooting.
+15. Confirm that no stale SpotUI frame remains, no stock tile receives an
+    unintended touch, and SpotUI does not immediately relaunch.
+16. Launch SpotUI again and complete at least one additional launch/exit cycle.
 
-### Stage 2: fresh provisioning
+### Stage 2: managed runtime upgrade
 
-Perform this only after Stage 1 passes and the active runtime has a verified
-laptop archive.
+Perform this stage only when the candidate is intended to upgrade an older
+recognized SpotUI runtime.
 
-1. Pause playback and archive the active runtime again.
-2. Remove the six active runtime targets only through a separately reviewed
-   ADB command; do not remove credentials, WiFi configuration, or unrelated
+1. Begin with a verified older managed SpotUI runtime.
+2. Record its version and manifest hashes before flashing the candidate.
+3. Keep the matched candidate `spotui-runtime.tar.xz` on the SD-card root.
+4. Flash and boot the candidate firmware.
+5. Inspect `/tmp/spotui-provision.log`.
+6. Confirm that the existing runtime is recognized as managed before any
+   replacement occurs.
+7. Confirm that the previous managed runtime is backed up and the candidate
+   runtime is installed successfully.
+8. Verify the installed runtime version, permissions, manifest hashes, and
+   staging cleanup.
+9. Confirm Spotify credentials, WiFi configuration, and unrelated `/usr/data`
+   contents are unchanged.
+10. Run the full launch, playback, return-to-HiBy, touchscreen-isolation, and
+    second-launch regression.
+
+If the provisioner reports an unrecognized runtime state, stop and investigate
+rather than forcing an overwrite.
+
+### Stage 3: fresh provisioning
+
+Perform this only after the currently working runtime has been archived and
+Stages 1 and 2, when applicable, have passed.
+
+1. Pause playback and make a final verified archive of the active runtime.
+2. Remove only the managed SpotUI runtime targets required to simulate a fresh
+   installation; do not remove credentials, WiFi configuration, or unrelated
    `/usr/data` content.
-3. Keep the matched `spotui-runtime.tar.xz` at the SD root and reboot so the
-   background provisioner installs it after the stock player starts.
-4. Verify the provision log, permissions, version marker, and every installed
-   hash before launching SpotUI.
-5. Run the full cold-launch, playback, queue, search, controls, sleep/wake,
-   headphone, persistence, exit, and recovery regression.
+3. Keep the matched `spotui-runtime.tar.xz` at the SD-card root.
+4. Boot the candidate firmware and allow the background provisioner to run
+   after the stock player starts.
+5. Inspect `/tmp/spotui-provision.log` and confirm that the fresh runtime is
+   installed without activating a partial staging state.
+6. Verify the provisioned version, permissions, manifest hashes, and cleanup
+   before launching SpotUI.
+7. Confirm private credentials and unrelated persistent data remain unchanged.
+8. Run the complete cold-launch, playback, queue, Search, controls, sleep/wake,
+   headphone, handoff, touchscreen-isolation, second-launch, and recovery
+   regression.
 
-Do not publish the image if either stage requires an unexplained manual repair.
+Do not publish a candidate if any required stage needs an unexplained manual
+repair.
