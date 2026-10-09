@@ -1,5 +1,5 @@
 #!/bin/sh
-# Non-blocking entry point invoked by the repurposed Qobuz tile.
+# Non-blocking entry point invoked by the dedicated SpotUI tile.
 #
 # The foreground request returns to hiby_player immediately. A detached,
 # locked worker runs the real launcher and preserves its uptime safety gate.
