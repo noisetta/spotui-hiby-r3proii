@@ -84,8 +84,12 @@ not the resulting credential. Do not share the URL while authorization is in
 progress. The access token and reusable authentication data are never printed.
 
 After completion, launch SpotUI and test Liked Songs, a searched track, audio,
-pause/resume, Next, and Exit/reboot. Authentication is persistent, so ADB and
-the computer are not required for ordinary playback afterward.
+pause/resume, Next, and normal Exit back to the stock HiBy interface.
+Authentication is persistent, so ADB and the computer are not required for
+ordinary playback afterward.
+
+Reboot once separately to confirm that the credential remains valid after a
+cold start. Reboot is not the normal SpotUI exit path.
 
 ## Existing credential and rollback modes
 
@@ -133,4 +137,9 @@ v1.5 two-file tester installer. Browser authorization created a distinct
 credential, the prior working cache was preserved, all credential paths were
 mode 0600 inside a mode-0700 directory, and no host or device staging residue
 remained. The new credential survived a reboot and passed Liked Songs, search,
-playback, pause/resume, Next, normal tile launch, and Exit/reboot testing.
+playback, pause/resume, Next, normal tile launch, and the then-current
+Exit/reboot behavior.
+
+That validation record predates the later suspend/resume return-to-HiBy
+handoff. It is retained as a historical authentication test record rather than
+a description of the current exit path.
