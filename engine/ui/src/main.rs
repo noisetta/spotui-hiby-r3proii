@@ -3612,7 +3612,7 @@ fn main() {
     // Try to fetch liked songs from the daemon. At cold boot the daemon may
     // not be listening yet (WiFi/daemon still starting), so we DON'T block here
     // -- we show a "connecting" placeholder and retry in the main loop. This is
-    // what lets the UI come up immediately after hiby_player is killed, keeping
+    // what lets the UI come up immediately after hiby_player is suspended, keeping
     // the panel lit (its continuous refresh prevents the ~20s blank) while the
     // daemon comes up in the background.
     eprintln!("[poc] fetching liked songs...");

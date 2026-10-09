@@ -1,20 +1,31 @@
 # Build and deploy SpotUI
 
-This document records the tested local cross-build workflow for the SpotUI
-`0.1.0-beta.2` interface and its librespot-based daemon on the HiBy R3 Pro II.
+This document records the tested local cross-build and incremental deployment
+workflow for SpotUI on the HiBy R3 Pro II.
+
+The current device-tested development checkpoint is
+`0.1.0-beta.5-test.4`. The latest publicly packaged tester prerelease remains
+`0.1.0-beta.2`.
 
 The commands below assume:
 
-- the public SpotUI repository is cloned at `$HOME/hiby-standalone-client-public`;
+- the public SpotUI repository is cloned at
+  `$HOME/hiby-standalone-client-public`;
 - a working Rust nightly toolchain is installed;
-- a working `mipsel-unknown-linux-musl` cross-build environment is already configured;
-- the local librespot source tree is available at `$HOME/mips-toolchain/librespot`;
-- ADB can reach the HiBy R3 Pro II.
+- a working `mipsel-unknown-linux-musl` cross-build environment is already
+  configured;
+- the local librespot source tree is available at
+  `$HOME/mips-toolchain/librespot`;
+- ADB can reach the HiBy R3 Pro II;
+- the device already has a compatible SpotUI firmware/runtime installation.
 
-The repository does not include proprietary firmware, device credentials, Spotify credentials, or a complete MIPS toolchain.
+The repository does not include proprietary firmware, device credentials,
+Spotify credentials, or a complete MIPS toolchain.
 
 > [!WARNING]
-> These instructions are specific to the HiBy R3 Pro II development setup used for SpotUI. Do not deploy the binaries to another model unless that device has been independently tested.
+> These instructions are specific to the HiBy R3 Pro II development setup used
+> for SpotUI. Do not deploy the binaries to another model unless that device has
+> been independently tested.
 
 ## Source locations
 
@@ -30,7 +41,35 @@ The canonical daemon source is:
 apps/spotify/daemon/spotui_daemon.rs
 ```
 
-The daemon is compiled inside a local librespot source tree because it uses librespot as an example binary.
+The daemon is compiled inside a local librespot source tree because it uses
+librespot as an example binary.
+
+## Version and checkpoint boundary
+
+The source checkpoint name, runtime version, and compiled Rust package version
+are related but are not automatically the same thing.
+
+Before building the UI, inspect its package version:
+
+```fish
+rg '^version = ' \
+    ~/hiby-standalone-client-public/engine/ui/Cargo.toml
+```
+
+The on-device Diagnostics version label is compiled from that Cargo package
+version.
+
+Do not assume that a binary belongs to a development checkpoint solely because
+of the Diagnostics label. For development validation, also record:
+
+- the source commit or tag;
+- the UI SHA-256;
+- the daemon SHA-256;
+- the runtime or firmware checkpoint being tested.
+
+The `0.1.0-beta.5-test.4` checkpoint identifies an exact validated development
+state. Source-level package-version changes should be reviewed separately from
+documentation-only synchronization.
 
 ## Rust toolchain
 
@@ -51,15 +90,11 @@ rustc +nightly --version
 cargo +nightly --version
 ```
 
-The custom MIPS environment must also provide the linker, archiver, C runtime, and target configuration required by `mipsel-unknown-linux-musl`. Those details are currently external to this repository.
+The custom MIPS environment must also provide the linker, archiver, C runtime,
+and target configuration required by `mipsel-unknown-linux-musl`. Those details
+are currently external to this repository.
 
 ## Build the interface
-
-Confirm the intended package version before building:
-
-```fish
-rg '^version = ' ~/hiby-standalone-client-public/engine/ui/Cargo.toml
-```
 
 From the repository:
 
@@ -88,13 +123,22 @@ sha256sum \
     target/mipsel-unknown-linux-musl/release/spotui-ui-poc
 ```
 
-The release profile is configured for a small binary with link-time optimization, symbol stripping, and abort-on-panic behavior.
+The release profile is configured for a small binary with link-time
+optimization, symbol stripping, and abort-on-panic behavior.
 
 ## Prepare the daemon build dependency
 
-The SpotUI daemon parses Spotify profile responses for playlist browsing and therefore requires `serde_json` as a direct development dependency in the local librespot checkout.
+The SpotUI daemon parses Spotify profile responses for playlist browsing and
+therefore requires `serde_json` as a direct development dependency in the
+local librespot checkout.
 
-Ensure `~/mips-toolchain/librespot/Cargo.toml` contains:
+Ensure:
+
+```text
+$HOME/mips-toolchain/librespot/Cargo.toml
+```
+
+contains:
 
 ```toml
 [dev-dependencies]
@@ -105,7 +149,8 @@ This changes only the separate local librespot checkout.
 
 ## Prepare the daemon source
 
-The daemon is built against the local librespot tree. The current source targets the librespot 0.8.0 API.
+The daemon is built against the local librespot tree. The current source
+targets the librespot 0.8.0 API.
 
 Copy the canonical daemon source into the librespot examples directory:
 
@@ -115,7 +160,7 @@ cp \
     ~/mips-toolchain/librespot/examples/spotui_daemon.rs
 ```
 
-Confirm that the two copies match before building:
+Confirm that the canonical and build-tree copies match:
 
 ```fish
 sha256sum \
@@ -123,7 +168,7 @@ sha256sum \
     ~/mips-toolchain/librespot/examples/spotui_daemon.rs
 ```
 
-Both hashes must be identical.
+Both hashes must be identical before building.
 
 ## Build the daemon
 
@@ -158,45 +203,87 @@ sha256sum \
 
 ## Device paths
 
-The tested deployment uses:
+The current managed runtime uses these principal paths:
 
 ```text
 /usr/data/spotui-ui-poc
 /usr/data/spotui_daemon
 /usr/data/ld-musl-mipsel-sf.so.1
-/usr/data/start_spotui.real.sh
 /usr/data/start_spotui.sh
+/usr/data/start_spotui.real.sh
+/usr/data/return_to_hiby.sh
 ```
 
-The launcher expects the UI and daemon binaries to be executable.
+The launcher expects the UI, daemon, and applicable scripts to have their
+tested permissions.
 
-## Back up the installed binaries
+Runtime state and credentials also live under `/usr/data`; do not replace or
+delete unrelated persistent data during an incremental binary deployment.
 
-The `/usr/data` partition is small enough that three daemon binaries cannot be
-kept safely. Before replacing either binary, pull the active matched pair and
-launcher to a dated directory on the build host and record their hashes:
+## Before replacing runtime files
+
+Exit SpotUI normally so that the stock HiBy interface has returned.
+
+Pause playback and confirm that SpotUI's playback process is no longer active
+before pulling, copying, or hashing large device binaries.
+
+Large reads and hashes can compete with real-time audio on the R3 Pro II and
+produce underruns that are artifacts of maintenance rather than normal
+playback.
+
+Confirm the current process state:
+
+```fish
+adb shell '
+ps | grep -E "spotui|aplay|hiby_player" | grep -v grep
+'
+```
+
+The stock `hiby_player` should be running normally when SpotUI is not active.
+
+## Back up the installed runtime files
+
+The `/usr/data` partition is constrained. Keep full archives on the build host
+rather than accumulating many rollback binaries on the device.
+
+Create a dated host directory:
 
 ```fish
 mkdir -p ~/spotui-device-backups/YYYY-MM-DD-description
+```
 
+Pull the active matched files:
+
+```fish
 adb pull /usr/data/spotui-ui-poc \
     ~/spotui-device-backups/YYYY-MM-DD-description/spotui-ui-poc
+
 adb pull /usr/data/spotui_daemon \
     ~/spotui-device-backups/YYYY-MM-DD-description/spotui_daemon
+
+adb pull /usr/data/ld-musl-mipsel-sf.so.1 \
+    ~/spotui-device-backups/YYYY-MM-DD-description/ld-musl-mipsel-sf.so.1
+
+adb pull /usr/data/start_spotui.sh \
+    ~/spotui-device-backups/YYYY-MM-DD-description/start_spotui.sh
+
 adb pull /usr/data/start_spotui.real.sh \
     ~/spotui-device-backups/YYYY-MM-DD-description/start_spotui.real.sh
 
+adb pull /usr/data/return_to_hiby.sh \
+    ~/spotui-device-backups/YYYY-MM-DD-description/return_to_hiby.sh
+```
+
+Record the backup hashes:
+
+```fish
 sha256sum ~/spotui-device-backups/YYYY-MM-DD-description/*
 ```
 
-Keep only one compatible `.previous` UI/daemon pair on the device. If staging a
-new daemon requires space, remove an obsolete device rollback only after its
-laptop archive has been verified.
+Keep only the device-side rollback copies required for the current test.
 
-Pause playback and confirm that `aplay` has exited before pulling, copying, or
-hashing device binaries. Large reads and hash calculations can compete with
-real-time audio on the R3 Pro II and produce underruns that are artifacts of
-the maintenance operation rather than normal playback.
+If staging a new binary requires space, remove an obsolete device rollback only
+after its host archive and hashes have been verified.
 
 ## Deploy the interface
 
@@ -225,13 +312,23 @@ adb shell '
 set -e
 
 chmod 755 /usr/data/spotui-ui-poc.new
-mv /usr/data/spotui-ui-poc /usr/data/spotui-ui-poc.previous
+
+if [ -f /usr/data/spotui-ui-poc ]; then
+    rm -f /usr/data/spotui-ui-poc.previous
+    mv \
+        /usr/data/spotui-ui-poc \
+        /usr/data/spotui-ui-poc.previous
+fi
+
 mv \
     /usr/data/spotui-ui-poc.new \
     /usr/data/spotui-ui-poc
 
 sync
-ls -lh /usr/data/spotui-ui-poc
+ls -lh \
+    /usr/data/spotui-ui-poc \
+    /usr/data/spotui-ui-poc.previous \
+    2>/dev/null
 '
 ```
 
@@ -262,19 +359,34 @@ adb shell '
 set -e
 
 chmod 755 /usr/data/spotui_daemon.new
-mv /usr/data/spotui_daemon /usr/data/spotui_daemon.previous
+
+if [ -f /usr/data/spotui_daemon ]; then
+    rm -f /usr/data/spotui_daemon.previous
+    mv \
+        /usr/data/spotui_daemon \
+        /usr/data/spotui_daemon.previous
+fi
+
 mv \
     /usr/data/spotui_daemon.new \
     /usr/data/spotui_daemon
 
 sync
-ls -lh /usr/data/spotui_daemon
+ls -lh \
+    /usr/data/spotui_daemon \
+    /usr/data/spotui_daemon.previous \
+    2>/dev/null
 '
 ```
 
-## Reboot and test
+For a UI/daemon protocol change, stage and hash-check both `.new` binaries
+before rotating either active file. Activate the compatible pair together and
+retain a compatible rollback pair.
 
-Do not try to restart the stock `hiby_player` process manually after SpotUI has taken over the framebuffer. The tested workflow is to reboot the player after deployment:
+## Test after incremental deployment
+
+A reboot is useful when the test specifically requires a clean cold-start
+state:
 
 ```fish
 adb reboot
@@ -282,35 +394,63 @@ adb reboot
 
 After the device finishes booting:
 
-1. Open the Stream media screen.
-2. Confirm that the SpotUI launcher tile renders correctly.
-3. Launch SpotUI.
-4. Confirm that the interface starts.
-5. Open Diagnostics and confirm `Version 0.1.0-beta.2`.
-6. Load the track list.
-7. Start playback.
-8. Confirm that audio is produced through the expected output.
-9. Test Liked Songs, a playlist, Search, controls, and automatic advancement.
-10. Confirm sleep/wake and headphone reconnection behavior.
-11. Exit and relaunch SpotUI.
-12. Reboot once more and repeat the startup test.
+1. confirm that the stock HiBy interface becomes responsive;
+2. open the Stream media screen;
+3. confirm that the dedicated SpotUI tile and stock Qobuz tile both appear;
+4. tap SpotUI;
+5. if launch readiness is still pending, confirm the native
+   **Preparing SpotUI...** notice appears;
+6. confirm SpotUI starts successfully;
+7. open Diagnostics and record the displayed version and status;
+8. load Liked Songs and at least one playlist;
+9. start playback;
+10. confirm audio through the expected output;
+11. test Previous, Next, pause, resume, seeking, and automatic advancement;
+12. test Search;
+13. confirm screen sleep/wake and headphone behavior;
+14. exit SpotUI normally;
+15. confirm the existing stock HiBy interface returns without rebooting;
+16. confirm no stock tile is selected unexpectedly;
+17. confirm SpotUI does not immediately relaunch;
+18. launch SpotUI again and complete a second launch/exit cycle.
 
-For a matched UI/daemon protocol change, stage and verify both `.new` files
-before rotating either active file. Activate them together and retain a
-protocol-compatible rollback pair.
+Do not treat the Diagnostics label alone as proof of the source checkpoint.
+Record the source commit and binary hashes with the test result.
+
+A separate reboot after this sequence is useful when validating cold-boot
+persistence or startup behavior, but reboot is no longer the normal SpotUI exit
+path.
+
+## Current handoff expectations
+
+The current development handoff is:
+
+1. the dedicated tile sends a request to the prestarted broker;
+2. the guarded launcher waits for the safe readiness state;
+3. the existing `hiby_player` process is suspended;
+4. SpotUI takes control of the framebuffer, audio path, and touchscreen;
+5. the UI grabs the touchscreen exclusively;
+6. normal Exit shuts down SpotUI's UI, daemon, and playback process;
+7. `/usr/data/return_to_hiby.sh` resumes the existing stock player;
+8. the broker is re-armed after the short input-drain delay.
+
+Do not manually launch a second `hiby_player` process as part of normal
+deployment or recovery.
 
 ## Runtime files and logs
 
-The tested runtime paths include:
+The primary current runtime state includes:
 
 ```text
 /tmp/spotui.sock
 /tmp/spotui-ui.log
 /tmp/daemon.log
 /tmp/start_spotui.wrapper.log
+/tmp/return_to_hiby.log
+/tmp/spotui-provision.log
 ```
 
-Inspect them with:
+Inspect the logs with:
 
 ```fish
 adb shell '
@@ -324,31 +464,86 @@ cat /tmp/spotui-ui.log 2>/dev/null || true
 echo
 echo "=== Daemon log ==="
 cat /tmp/daemon.log 2>/dev/null || true
+
+echo
+echo "=== Return log ==="
+cat /tmp/return_to_hiby.log 2>/dev/null || true
+
+echo
+echo "=== Provision log ==="
+cat /tmp/spotui-provision.log 2>/dev/null || true
 '
 ```
 
-Check the relevant processes:
+Check the relevant processes and socket:
 
 ```fish
 adb shell '
-ps | grep -E "spotui|aplay|librespot" | grep -v grep
+ps | grep -E "spotui|aplay|librespot|hiby_player" | grep -v grep
+ls -l /tmp/spotui.sock 2>/dev/null
 '
 ```
 
-Reading a short log tail during playback is normally lightweight. Perform full
-device-binary hashes, large pulls, and storage audits while playback is paused.
+Reading a short log tail during playback is normally lightweight.
 
-## Release-candidate archive
+Perform full device-binary hashes, large pulls, and storage audits while
+playback is paused.
 
-After the complete device regression passes, archive the exact active UI and
-daemon pair on the build host. Record their SHA-256 hashes, the SpotUI version,
-the source commit, the device model, and the test date. Keep credentials,
-cache files, proprietary firmware, and user-specific logs out of the public
-archive.
+## Touchscreen validation
+
+The current UI exclusively grabs the touchscreen while SpotUI is active.
+
+A validated build should log successful exclusive touchscreen ownership.
+
+After Exit, verify that:
+
+- a touch made inside SpotUI is not replayed into the stock interface;
+- no stock tile is selected unexpectedly;
+- SpotUI does not immediately relaunch;
+- a new deliberate tap on the SpotUI tile still works.
+
+If those conditions fail, preserve the UI, wrapper, and return logs before
+changing the handoff timing.
+
+## Framebuffer return diagnostics
+
+One intermittent stale-framebuffer return was observed during earlier
+development testing but was not reproduced during final
+`0.1.0-beta.5-test.4` validation.
+
+No speculative framebuffer-page workaround is part of the current deployment
+workflow.
+
+If it reappears, follow the evidence-capture procedure in
+[Recovery and restore notes](recovery.md) before modifying framebuffer behavior.
+
+## Development archive
+
+After a complete device regression passes, archive the exact active development
+pair on the build host.
+
+Record:
+
+- UI SHA-256;
+- daemon SHA-256;
+- relevant launcher/return-script hashes;
+- source commit or tag;
+- firmware/runtime checkpoint;
+- device model;
+- test date.
+
+A successful local regression does not make that archive a public release
+candidate.
+
+Before public distribution, follow
+[Tester release bundle workflow](release-bundle.md).
+
+Keep credentials, cache files, proprietary firmware, device backups, and
+user-specific logs out of public artifacts.
 
 ## Rollback
 
-To restore the immediately previous binaries:
+To restore the immediately previous UI/daemon pair:
 
 ```fish
 adb shell '
@@ -373,7 +568,11 @@ reboot
 '
 ```
 
-For firmware-level recovery, see [Recovery notes](recovery.md).
+The reboot above establishes a clean state after restoring the binary pair. It
+is not the normal SpotUI Exit behavior.
+
+For launcher, return-script, firmware, managed-runtime, or framebuffer
+recovery, see [Recovery and restore notes](recovery.md).
 
 ## Repository hygiene
 
@@ -385,6 +584,8 @@ Do not commit:
 - WiFi credentials;
 - proprietary firmware files;
 - extracted proprietary rootfs trees;
-- device logs containing private information.
+- device backups;
+- unsanitized device logs containing private information.
 
-Commit the canonical Rust sources, scripts, documentation, and non-proprietary project assets only.
+Commit the canonical Rust sources, scripts, documentation, and
+non-proprietary project assets only.

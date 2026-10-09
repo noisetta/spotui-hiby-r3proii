@@ -2,15 +2,27 @@
 
 SpotUI for the HiBy R3 Pro II: an experimental standalone, tetherless streaming UI/client with on-device control.
 
-> Experimental tester beta `0.1.0-beta.2`. A manually installed, device-tested
-> HiBy R3 Pro II bundle may be published as a clearly marked GitHub prerelease;
-> it is not a one-click or production-ready package.
+> Current device-tested development checkpoint: `0.1.0-beta.5-test.4`.
+> The latest publicly packaged tester prerelease remains `0.1.0-beta.2`.
+> Development checkpoints are experimental and are not automatically equivalent
+> to reviewed public release bundles.
 
 [![Support me on Ko-fi](https://ko-fi.com/img/githubbutton_sm.svg)](https://ko-fi.com/noisetta)
 
 Optional donations support test hardware, documentation, maintenance, and continued experimentation. Nothing is paywalled.
 
 ## Screenshots
+
+<p align="center">
+  <img
+    src="docs/images/spotui-dedicated-launcher.png"
+    alt="HiBy R3 Pro II Stream Media screen showing the dedicated SpotUI launcher tile alongside TIDAL, Qobuz, and Custom radio"
+    width="360">
+</p>
+
+<p align="center">
+  <em>SpotUI appears as its own launcher entry alongside the stock streaming services, with Qobuz preserved.</em>
+</p>
 
 <p>
   <img src="docs/images/spotui-showcase-v1.png" alt="SpotUI theme and interface showcase">
@@ -22,44 +34,41 @@ This project is not affiliated with, endorsed by, or supported by HiBy Music or 
 
 ## Status
 
-Developer beta `0.1.0-beta.2`, tested primarily on the HiBy R3 Pro II.
+SpotUI is under active development and is currently tested primarily on the HiBy R3 Pro II.
 
-Current device-side features include:
+Current device-side highlights include:
 
+- Dedicated SpotUI launcher tile alongside the stock services, with Qobuz preserved
+- Native **Preparing SpotUI...** feedback, guarded startup readiness, and direct
+  return to the HiBy player without rebooting
 - On-device browsing and queued playback of Liked Songs and playlists
-- On-device track search with responsive, tap-safe result loading and a
-  persistent, deduplicated eight-query recent-search list
-- Automatic invalidation and refresh of visible search results after a
-  supervised daemon restart
-- Queue-aware Previous, Next, and Up Next views
-- Dedicated Now Playing screen with larger metadata, progress seeking,
-  playback controls, and direct Up Next access
-- Persistent shuffle, Repeat Off, Repeat All, and Repeat One modes
-- Pause, resume, and touchscreen progress seeking
-- Fixed bottom toolbar with Exit, Brightness, Pause/Resume, and navigation controls
-- Persistent brightness selection
-- Persistent screen-sleep settings for 30 seconds, 60 seconds, 2 minutes,
-  5 minutes, or Never, with safe touch or power-button wake and
-  saved-brightness restore
-- Battery percentage display
-- Automatic 3.5 mm and 4.4 mm output routing
-- Automatic pause when the active headphone output is disconnected
-- Header-based paging through track, playlist, search, and queue lists
-- Track-name truncation for the compact display
+- Responsive track search with persistent recent-search history
+- Queue-aware Previous, Next, and Up Next navigation
+- Dedicated Now Playing screen with metadata, seeking, playback controls, and
+  direct queue access
+- Persistent shuffle, repeat, brightness, and screen-sleep settings
+- Touch and physical power-button wake with saved-brightness restoration
+- Automatic 3.5 mm and 4.4 mm output routing, including pause on headphone
+  disconnection
+- Paging and compact-display handling for long track, playlist, search, and
+  queue views
 - Ten appearance themes with performance-aware ambient animation
-- A staged WiFi, Spotify, and library loading screen
-- Supervised playback recovery and reconnect feedback
-- Live diagnostics for WiFi, Spotify, audio, output, and queue state, with an
-  on-device version identifier
+- Staged startup, supervised playback recovery, reconnect feedback, and live
+  diagnostics for WiFi, Spotify, audio, output, and queue state
 
 “Tetherless” means playback can be browsed and controlled directly from the HiBy instead of using it only as a receiver controlled by a phone or desktop client.
 
-SpotUI is launched manually from its repurposed stock tile. On a cold boot,
-the stock player may remain visible for tens of seconds while its audio
-hardware finishes initializing; SpotUI's loading page appears after the safe
-handoff begins. This delay is intentional because stopping the stock player
-too early can leave the headphone outputs silent until reboot. Automatic
-takeover is not enabled, so normal use of the stock player remains available.
+SpotUI is launched manually from its dedicated launcher tile. On a cold boot,
+an early launch request is acknowledged with a native **Preparing SpotUI...**
+message while the stock player finishes initializing its audio hardware.
+SpotUI waits for a guarded readiness check before suspending `hiby_player` and
+taking over the display and audio path. This delay is intentional because
+taking control from the stock player too early can leave the headphone outputs
+silent until reboot.
+
+When SpotUI exits normally, the existing `hiby_player` process is resumed
+instead of rebooting the device. Automatic takeover is not enabled, so normal
+use of the stock player remains available.
 
 Flashing or modifying firmware can brick your device. Use at your own risk.
 
@@ -84,11 +93,15 @@ The Git-tracked source tree does not include:
 - user-specific device backups
 - release binaries or ready-to-flash firmware builds
 
-A reviewed [GitHub prerelease](https://github.com/noisetta/spotui-hiby-r3proii/releases)
-may provide an exact, device-tested firmware/runtime bundle as a separate
-download. Release assets remain experimental and may contain proprietary HiBy
-components outside SpotUI's license. They never include Spotify credentials,
-WiFi credentials, cache data, logs, or user-specific device files. Read every
+Reviewed [GitHub prereleases](https://github.com/noisetta/spotui-hiby-r3proii/releases)
+may provide exact, device-tested firmware/runtime bundles as separate
+downloads. The latest publicly packaged tester prerelease is `0.1.0-beta.2`;
+newer source and device-tested development checkpoints are not automatically
+equivalent to public release bundles.
+
+Release assets remain experimental and may contain proprietary HiBy components
+outside SpotUI's license. They never include Spotify credentials, WiFi
+credentials, cache data, logs, or user-specific device files. Read every
 included notice and recovery document before flashing.
 
 ## Repository structure
@@ -126,6 +139,7 @@ This is an independent community research/modding project. It is provided withou
 
 ## Project documents
 
+- [0.1.0-beta.5-test.4 development checkpoint](docs/releases/0.1.0-beta.5-test.4.md)
 - [0.1.0-beta.2 release notes](docs/releases/0.1.0-beta.2.md)
 - [0.1.0-beta.1 release notes](docs/releases/0.1.0-beta.1.md)
 - [Beta testing guide](docs/testing.md)
