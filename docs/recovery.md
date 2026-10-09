@@ -1,32 +1,44 @@
 # Recovery and restore notes
 
-Firmware and device modifications can fail. This document collects tested recovery precautions and troubleshooting directions for SpotUI-related experiments.
+Firmware and device modifications can fail. This document collects tested
+recovery precautions and troubleshooting directions for SpotUI-related
+experiments on the HiBy R3 Pro II.
+
+The current device-tested development checkpoint is
+`0.1.0-beta.5-test.4`. The latest publicly packaged tester prerelease remains
+`0.1.0-beta.2`.
 
 ## Before modifying anything
 
 - Make sure the device battery is charged.
-- Keep a copy of the official stock firmware for your exact device model.
-- Keep backups of any files you replace on `/usr/data`.
-- Do not flash firmware intended for a different HiBy model.
-- Do not test unverified builds if you are not prepared to recover the device.
+- Keep official stock recovery firmware for the exact device model.
+- Keep verified backups of every `/usr/data` file you replace.
+- Record hashes before replacing working binaries or scripts.
+- Keep a known-good SpotUI firmware/runtime pair when testing a newer one.
+- Do not flash firmware intended for another HiBy model.
+- Do not test unverified builds unless you are prepared to recover the device.
 
 ## General restore approach
 
-The safest restore path is usually to return to official stock firmware using the normal HiBy firmware update process for the device.
+The safest full restore path is usually to return to official stock firmware
+using the normal HiBy firmware update process for the exact device.
 
 General approach:
 
-1. Obtain the official firmware for your exact device model.
-2. Copy it to the SD card using the filename expected by the stock updater.
-3. Boot into the normal firmware update flow.
-4. Reflash stock firmware.
-5. Remove any experimental files from `/usr/data` if needed.
+1. obtain official firmware for the exact device model;
+2. copy it to the SD card using the filename expected by the stock updater;
+3. enter the normal firmware update flow;
+4. reflash stock firmware;
+5. inspect `/usr/data` afterward and remove experimental SpotUI runtime files
+   only when that cleanup is actually required.
 
-Exact button combinations, filenames, and update behavior may vary by model. Confirm the process for your device before experimenting.
+Exact button combinations, filenames, and update behavior may vary by model.
+Confirm the recovery process before experimenting.
 
 ## Restore the previous UI and daemon binaries
 
-Development deployments should keep one previous copy of each binary on `/usr/data`:
+Incremental development deployments should keep one previous compatible copy
+of each binary on `/usr/data`:
 
 ```text
 /usr/data/spotui-ui-poc.previous
@@ -58,20 +70,37 @@ reboot
 '
 ```
 
-Use a reboot after restoring the files. Do not try to restart the stock `hiby_player` process manually after SpotUI has taken control of the framebuffer.
+Use a reboot after restoring binaries when a clean cold-start regression is
+needed.
 
-## If the launcher fails or SpotUI starts too early
+Do not attempt to recover a failed handoff by manually starting another
+`hiby_player` process. The validated current design suspends and later resumes
+the original stock-player process.
 
-The current launcher uses a nonblocking wrapper and waits for the stock player, framebuffer, ALSA devices, mixer state, and minimum uptime to become ready.
+## If SpotUI does not launch
 
-On a cold boot, continuing to see the responsive stock interface for tens of
-seconds after tapping SpotUI can be normal. Repeated taps are ignored by the
-launch lock. SpotUI cannot safely draw its own progress page until the stock
-player has completed audio initialization and released the framebuffer. Do not
-shorten the readiness gate merely to make the UI appear sooner: stopping the
-stock player early has caused silent headphone output that required a reboot.
+The current launcher accepts the request through a lightweight prestarted
+broker and waits for guarded readiness conditions before suspending the stock
+player.
 
-Inspect the startup logs:
+The readiness checks include:
+
+- minimum system uptime;
+- a valid `hiby_player` process;
+- expected stock-player initialization state;
+- framebuffer availability;
+- required ALSA controls;
+- stable mixer state.
+
+On a cold boot, an early request should display the native
+**Preparing SpotUI...** notice while the request remains pending. Repeated
+tapping is not required.
+
+Do not shorten or bypass the readiness gate merely to reduce launch latency.
+Taking control before codec and mixer initialization has previously produced
+silent headphone output until reboot.
+
+Inspect the startup state with:
 
 ```fish
 adb shell '
@@ -85,13 +114,20 @@ cat /tmp/spotui-ui.log 2>/dev/null || true
 echo
 echo "=== Daemon log ==="
 cat /tmp/daemon.log 2>/dev/null || true
+
+echo
+echo "=== Provision log ==="
+cat /tmp/spotui-provision.log 2>/dev/null || true
 '
 ```
+If SpotUI reaches its own startup screen but stalls at a later stage, use the
+retry action for the stage being shown:
 
-The startup page shows elapsed waiting time and a retry action for its current
-stage. `Retry Wi-Fi` renews association and DHCP, `Retry Spotify` restarts only
-the supervised daemon attempt, and `Retry Library` repeats the saved-track
-request. Automatic recovery continues even when the button is not used.
+- **Retry Wi-Fi** renews association and DHCP;
+- **Retry Spotify** restarts the supervised daemon attempt;
+- **Retry Library** repeats the saved-track request.
+
+Automatic recovery continues even when the retry action is not used.
 
 Check the relevant processes and socket:
 
@@ -102,122 +138,77 @@ ls -l /tmp/spotui.sock 2>/dev/null
 '
 ```
 
-If the stock interface freezes on the last framebuffer image, reboot the device. Manually launching `hiby_player` after framebuffer takeover has not been a reliable recovery method.
+If SpotUI never appears, confirm first that the provisioned runtime and
+launcher files match the expected build before changing readiness logic.
 
-## If a search result shows Reconnecting or Nothing Playing
+## If SpotUI does not return cleanly to HiBy
 
-A Spotify session can close after the result list has been fetched but before
-the selected track obtains its audio key. The daemon exits after repeated
-unavailable-track failures so its supervisor can establish a fresh session.
+Normal SpotUI exit should:
 
-Starting with SpotUI `0.1.0-beta.1`, the UI invalidates visible results when
-the daemon becomes unavailable, briefly returns to the active-search screen,
-and automatically reruns the saved query after reconnection. Wait for the
-refreshed results page before tapping a track again.
+1. shut down the SpotUI UI;
+2. stop its supervised daemon and playback process;
+3. resume the suspended stock `hiby_player`;
+4. allow pending input to drain briefly;
+5. re-arm the SpotUI launch broker.
 
-If the results do not refresh:
-
-1. return to Search and press `Go` again;
-2. confirm that `/tmp/spotui.sock` exists and the daemon is running;
-3. inspect `/tmp/spotui-ui.log` and `/tmp/daemon.log` for connection or audio-key
-   errors;
-4. reboot if the supervised daemon does not recover.
-
-## If SpotUI launches but audio does not play
-
-Possible causes:
-
-- The stock player was killed too early before codec initialization completed.
-- The backend daemon is not running.
-- `aplay` is not running while Spotify reports active playback. It normally
-  exits while playback is paused or stopped.
-- The output jack route is wrong.
-- WiFi is not connected.
-- `/usr/data` is full.
-
-Useful checks:
+Inspect:
 
 ```fish
 adb shell '
-df -h /usr/data
-ps | grep -E "spotui|aplay|librespot|wpa" | grep -v grep
-cat /sys/class/switch/headset/state 2>/dev/null
-cat /sys/class/switch/balance/state 2>/dev/null
-amixer -c 0 cget numid=9 2>/dev/null
+echo "=== Return log ==="
+cat /tmp/return_to_hiby.log 2>/dev/null || true
+
+echo
+echo "=== Wrapper log ==="
+cat /tmp/start_spotui.wrapper.log 2>/dev/null || true
+
+echo
+echo "=== Processes ==="
+ps | grep -E "spotui|aplay|hiby_player" | grep -v grep
 '
 ```
 
-## If playback stops after a short time
+A normal return should not reboot the device.
 
-Check free space on `/usr/data`:
+If the stock interface does not recover, do not start a second
+`hiby_player` manually. Reboot the device and return to a known-good build if
+needed.
 
-```fish
-adb shell '
-df -h /usr/data
-ls -lah /usr/data/tmp
-'
-```
+## If a stock tile is selected after SpotUI exits
 
-SpotUI uses temporary files during playback. Stale temp files can fill the small persistent partition. The launcher should clean stale `/usr/data/tmp/.tmp*` files before starting the daemon, but active temp files should not be deleted while playback is running.
+The current UI exclusively grabs the touchscreen while SpotUI is active so
+touch events generated during the SpotUI session are not later consumed by
+the suspended stock interface.
 
-## If the screen goes black
+If a stock tile is unexpectedly selected after return:
 
-The display and backlight behavior on the R3 Pro II is delicate. SpotUI relies on frequent framebuffer refreshes to keep the panel visible.
+1. record `/tmp/return_to_hiby.log`;
+2. record `/tmp/start_spotui.wrapper.log`;
+3. confirm the active UI binary matches the expected build;
+4. confirm the SpotUI UI logged successful exclusive touchscreen ownership;
+5. repeat the test only after preserving the first failure evidence.
 
-Possible causes:
+Do not immediately add longer sleeps or input-clearing workarounds without
+first determining whether exclusive input grabbing was actually active.
 
-- The UI did not start quickly enough after the stock player was stopped.
-- The device backlight setting is not configured to stay available during startup.
-- A test build stopped refreshing the framebuffer.
-- Brightness was set too low.
+## If SpotUI immediately relaunches after exit
 
-If ADB is still available, restore the tested maximum brightness with:
+The launch broker should be re-armed only after the current SpotUI session has
+ended and the short input-drain delay has completed.
 
-```fish
-adb shell '
-echo 100 > /sys/class/backlight/backlight_pwm0/brightness
-'
-```
-
-The tested raw maximum is `100`. Do not write `101`.
-
-If the panel does not recover, reboot the device and return to a known-good build.
-
-## Restore the stock Qobuz launcher entry
-
-The current firmware integration repurposes the stock Qobuz tile. Restoring Qobuz requires all of the following:
-
-- restore the four original Qobuz PNG resources;
-- restore the visible localization value from `SpotUI` to `Qobuz`;
-- restore the original launcher behavior or reflash official stock firmware.
-
-The original artwork is retained in the public repository at:
-
-```text
-engine/launcher/resources/qobuz-original/
-```
-
-The firmware resource filesystem under `/usr/resource` is read-only during normal operation. Pushing replacement files there with ADB is not persistent and cannot be used as a complete restore method.
-
-For a durable restore, either:
-
-1. rebuild a firmware image containing the original resources and caption; or
-2. reflash the official stock firmware for the exact HiBy R3 Pro II model.
-
-The localization key itself remains `qobuz`. Only its displayed UTF-16LE value changes:
-
-```xml
-<qobuz>Qobuz</qobuz>
-```
-
-## If the device repeatedly launches SpotUI unexpectedly
-
-Remove or disable the SpotUI launcher integration, or reflash stock firmware.
-
-Useful files to check on development builds:
+If SpotUI relaunches unexpectedly:
 
 ```fish
 adb shell '
+echo "=== Wrapper log ==="
+cat /tmp/start_spotui.wrapper.log 2>/dev/null || true
+
+echo
+echo "=== Return log ==="
+cat /tmp/return_to_hiby.log 2>/dev/null || true
+
+echo
+echo "=== Runtime files ==="
 ls -lah \
     /usr/data/spotui-ui-poc \
     /usr/data/start_spotui.sh \
@@ -227,34 +218,293 @@ ls -lah \
 '
 ```
 
-Because the current launcher entry is embedded in the firmware-side HiBy integration, a durable return to the original Qobuz behavior requires a rebuilt firmware image or an official stock reflash.
+Confirm that the UI, launcher, and return script all belong to the same tested
+runtime before changing the broker or handoff behavior.
+
+## If the returned stock interface shows a stale SpotUI frame
+
+One intermittent stale-framebuffer return was observed during earlier
+development testing. It was not reproduced during final
+`0.1.0-beta.5-test.4` validation, so no speculative framebuffer-page fix was
+added.
+
+If the condition reappears, collect evidence before pressing the power button
+or rebooting when practical:
+
+```fish
+adb shell '
+echo -n "pan: "
+cat /sys/class/graphics/fb0/pan 2>/dev/null
+echo
+
+echo "=== Return log ==="
+cat /tmp/return_to_hiby.log 2>/dev/null || true
+'
+```
+
+The framebuffer is double-buffered. During prior investigation the stock HiBy
+interface was observed using the second visible page while SpotUI writes its
+own frame to the first page.
+
+Do not assume a particular pan value is the cause unless a reproduced failure
+supports it.
+
+If the panel remains unusable, reboot and return to a known-good build.
+
+## If Search shows Reconnecting or Nothing Playing
+
+A Spotify session can close after a result list has been fetched but before
+the selected track obtains its audio key. The daemon exits after repeated
+unavailable-track failures so its supervisor can establish a fresh session.
+
+Starting with SpotUI `0.1.0-beta.1`, the UI invalidates visible results when
+the daemon becomes unavailable, briefly returns to the active-search screen,
+and automatically reruns the saved query after reconnection.
+
+Wait for the refreshed results page before tapping a track again.
+
+If results do not refresh:
+
+1. return to Search and press `Go` again;
+2. confirm `/tmp/spotui.sock` exists and the daemon is running;
+3. inspect `/tmp/spotui-ui.log` and `/tmp/daemon.log`;
+4. reboot if the supervised daemon does not recover.
+
+## If SpotUI launches but audio does not play
+
+Possible causes include:
+
+- SpotUI took control before stock codec/mixer initialization completed;
+- the backend daemon is not running;
+- `aplay` is absent while Spotify reports active playback;
+- the output jack route is incorrect;
+- WiFi is disconnected;
+- `/usr/data` is full;
+- the active runtime does not match the firmware-side integration.
+
+`aplay` normally exits while playback is paused or stopped, so its absence is
+only meaningful while playback should be active.
+
+Useful checks:
+
+```fish
+adb shell '
+df -h /usr/data
+
+ps | grep -E "spotui|aplay|librespot|wpa|hiby_player" | grep -v grep
+
+cat /sys/class/switch/headset/state 2>/dev/null
+cat /sys/class/switch/balance/state 2>/dev/null
+
+amixer -c 0 cget numid=9 2>/dev/null
+'
+```
+
+Also inspect:
+
+```fish
+adb shell '
+cat /tmp/start_spotui.wrapper.log 2>/dev/null
+echo
+cat /tmp/daemon.log 2>/dev/null
+'
+```
+
+If the failure occurs only after an unusually early launch attempt, preserve
+the readiness logs before changing anything.
+
+## If playback stops after a short time
+
+Check free space under `/usr/data`:
+
+```fish
+adb shell '
+df -h /usr/data
+ls -lah /usr/data/tmp
+'
+```
+
+SpotUI uses temporary files during playback. Stale temp files can fill the
+small persistent partition.
+
+The launcher should clean stale:
+
+```text
+/usr/data/tmp/.tmp*
+```
+
+before starting the daemon.
+
+Do not delete active temporary files while playback is running.
+
+Pause playback before large hashes, pulls, or storage audits because
+maintenance I/O can compete with real-time audio and create test-only
+underruns.
+
+## If the screen goes black
+
+The display and backlight behavior on the R3 Pro II is delicate. SpotUI
+depends on framebuffer refreshes and panel/backlight control while active.
+
+Possible causes include:
+
+- the UI failed during framebuffer takeover;
+- a development build stopped refreshing the framebuffer;
+- the panel did not wake correctly;
+- brightness was set too low;
+- a mismatched UI/runtime was installed.
+
+If ADB remains available, try restoring a clearly visible brightness value:
+
+```fish
+adb shell '
+echo 100 > /sys/class/backlight/backlight_pwm0/brightness
+'
+```
+The tested raw maximum is `100`. Do not write `101`.
+
+Then inspect the UI and wrapper logs.
+
+If the panel does not recover, reboot the device and return to a known-good
+build.
+
+## If provisioning fails
+
+The current firmware-side provisioner supports managed runtime installation
+and upgrades.
+
+Inspect:
+
+```fish
+adb shell '
+cat /tmp/spotui-provision.log 2>/dev/null || true
+echo
+df -h /usr/data
+'
+```
+
+Expected broad states are:
+
+- matching managed runtime: leave it in place;
+- older verified managed runtime: back it up and upgrade it;
+- fresh managed installation: install the matched SD-card runtime;
+- unrecognized or unsafe runtime: refuse to overwrite automatically.
+
+If the provisioner refuses an unrecognized runtime state, treat that refusal
+as a safety feature.
+
+Do not delete or overwrite the unknown state merely to make the installer
+continue.
+
+Before any manual cleanup:
+
+1. archive the existing runtime privately;
+2. record hashes and version markers;
+3. confirm the candidate firmware/runtime pair is matched;
+4. preserve credentials and unrelated `/usr/data` data.
+
+## If the runtime upgrade fails
+
+A managed upgrade should preserve the previously recognized runtime as its
+rollback copy before activating the new one.
+
+If an upgrade fails:
+
+1. stop before launching SpotUI;
+2. preserve `/tmp/spotui-provision.log`;
+3. inspect free space;
+4. identify the active, rollback, and staging runtime state;
+5. compare all available hashes with the expected manifests;
+6. restore only a verified compatible runtime.
+
+Do not mix launcher scripts, UI binaries, daemon binaries, or runtime metadata
+from unrelated checkpoints.
+
+## Qobuz and the dedicated SpotUI tile
+
+The current validated development integration does **not** repurpose Qobuz.
+
+SpotUI has its own dedicated launcher tile, and the stock Qobuz tile remains
+available independently.
+
+Therefore, restoring Qobuz is not part of normal SpotUI rollback.
+
+If a much older experimental firmware build replaced the Qobuz entry, use the
+historical documentation for that build or reflash a known-good/current
+firmware image. Do not apply the old Qobuz-restoration procedure to the current
+dedicated-tile integration.
+
+## Restore the complete stock firmware
+
+Use official stock firmware when you need to remove the firmware-side SpotUI
+integration completely or when the experimental firmware state is no longer
+trusted.
+
+A full stock reflash is preferable to piecemeal restoration when:
+
+- the player binary state is uncertain;
+- firmware resources no longer match the expected build;
+- the device fails during normal boot;
+- multiple experimental firmware revisions have been mixed;
+- the OTA/rootfs state cannot be verified confidently.
+
+Afterward, inspect `/usr/data` separately if you also want to remove persistent
+SpotUI runtime files or credentials.
+
+Do not assume a stock firmware flash necessarily erases every persistent
+`/usr/data` file.
 
 ## Known-good backup practice
 
-Before replacing a working build, save copies of:
+Before replacing a working build, preserve:
 
 - UI binary;
-- launcher scripts;
 - daemon binary;
-- loader;
-- current source code;
-- known-good firmware output and checksums;
-- original launcher artwork and localization files.
+- musl loader;
+- launcher scripts;
+- return-to-HiBy script;
+- runtime version and manifest metadata;
+- current source commit or tag;
+- known-good firmware/runtime pair and checksums;
+- recovery firmware.
 
-Keep private backups outside the public repository. Do not commit device snapshots, credentials, WiFi configuration, cache files, or firmware images.
+Keep private backups outside the public repository.
 
-Pause playback before creating or verifying large device-side backups. Hashing
-or pulling large binaries while audio is active can temporarily compete with
-the playback process on this device.
+Do not commit:
+
+- device snapshots;
+- Spotify credentials;
+- WiFi configuration;
+- librespot cache contents;
+- proprietary firmware;
+- extracted proprietary binaries;
+- unsanitized private logs.
+
+Pause playback before creating or verifying large device-side backups.
 
 ## Public issue reports
 
-When reporting problems publicly, do not include:
+When reporting problems publicly, provide the smallest useful sanitized
+evidence.
 
-- WiFi passwords;
-- Spotify credentials;
+Useful information can include:
+
+- SpotUI checkpoint or release;
+- source commit or tag;
+- device model and firmware base;
+- whether the test followed a cold reboot;
+- whether launch was requested before readiness;
+- exact reproduction steps;
+- sanitized relevant log excerpts.
+
+Do not include:
+
+- WiFi passwords or network secrets;
+- Spotify credentials or tokens;
 - `librespot-cache/` contents;
-- personal logs with account information;
-- proprietary firmware images or extracted proprietary binaries.
+- account identifiers;
+- private device backups;
+- proprietary firmware or extracted proprietary binaries;
+- unsanitized logs containing personal information.
 
-Sanitize logs before posting.
+For structured tester reporting, see [Beta testing SpotUI](testing.md).
