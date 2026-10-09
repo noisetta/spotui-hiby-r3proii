@@ -13,6 +13,17 @@ Optional donations support test hardware, documentation, maintenance, and contin
 
 ## Screenshots
 
+<p align="center">
+  <img
+    src="docs/images/spotui-dedicated-launcher.png"
+    alt="HiBy R3 Pro II Stream Media screen showing the dedicated SpotUI launcher tile alongside TIDAL, Qobuz, and Custom radio"
+    width="360">
+</p>
+
+<p align="center">
+  <em>SpotUI appears as its own launcher entry alongside the stock streaming services, with Qobuz preserved.</em>
+</p>
+
 <p>
   <img src="docs/images/spotui-showcase-v1.png" alt="SpotUI theme and interface showcase">
 </p>
